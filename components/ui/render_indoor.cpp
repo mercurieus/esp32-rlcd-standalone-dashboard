@@ -62,17 +62,25 @@ Series series_of(const app_core::IndoorData& indoor, bool temperature) {
   return series;
 }
 
-// x by slot index across the whole window, y by the series' own min..max.
+// x by slot index from `origin` to the newest slot, y by the series' own
+// min..max.
 //
-// x deliberately ignores how many slots are present: a point sits where its
-// time puts it, so a gap in the middle of the window leaves a gap in the
-// line rather than closing up. That is the entire reason the series comes
-// out of the ring by position - see history_series() in history.hpp.
-ChartPoint plot_point(const Rect plot, std::size_t index, const Series& series,
-                      int value) {
+// x counts slots, not present readings: a point sits where its time puts it,
+// so a gap in the middle leaves a gap in the line rather than closing up.
+// That is the entire reason the series comes out of the ring by position -
+// see history_series() in history.hpp. `origin` is the oldest slot with any
+// reading (indoor_history_origin), which is what spends the full width on
+// the history that exists instead of leaving four-fifths of the box blank
+// while the ring fills.
+ChartPoint plot_point(const Rect plot, std::size_t index, std::size_t origin,
+                      const Series& series, int value) {
+  const std::size_t span = app_core::kIndoorHistoryPoints - 1 - origin;
   const int x =
-      plot.x + static_cast<int>(index * static_cast<std::size_t>(plot.width - 1) /
-                                (app_core::kIndoorHistoryPoints - 1));
+      span == 0
+          ? plot.right() - 1
+          : plot.x + static_cast<int>((index - origin) *
+                                      static_cast<std::size_t>(plot.width - 1) /
+                                      span);
   const int range = series.maximum - series.minimum;
   int y = plot.y + plot.height / 2;
   if (range != 0) {
@@ -138,13 +146,13 @@ void draw_lone_point(lv_obj_t* parent, const ChartPoint point) {
   line_segment(parent, point.x - 1, point.y - 1, 3, 3);
 }
 
-void draw_series(lv_obj_t* parent, const Rect plot, const Series& series,
-                 bool dashed) {
+void draw_series(lv_obj_t* parent, const Rect plot, std::size_t origin,
+                 const Series& series, bool dashed) {
   std::vector<ChartPoint> run;
-  for (std::size_t i = 0; i <= app_core::kIndoorHistoryPoints; ++i) {
+  for (std::size_t i = origin; i <= app_core::kIndoorHistoryPoints; ++i) {
     const bool present = i < app_core::kIndoorHistoryPoints && series.present[i];
     if (present) {
-      run.push_back(plot_point(plot, i, series, series.value[i]));
+      run.push_back(plot_point(plot, i, origin, series, series.value[i]));
       continue;
     }
     if (run.size() == 1) {
@@ -177,23 +185,21 @@ std::string time_at(const app_core::IndoorData& indoor, std::size_t index) {
   return buffer;
 }
 
-// A tick on the curve at its own extreme, labelled with the value and, when
-// the clock allows it, when it happened.
+// A tick on the curve at its own extreme, labelled with the value alone.
+//
+// No time in the label: the hour rules behind the plot and the two axis
+// labels under it already say when, and carrying it here as well made every
+// marker about 92 px wide on a chart that has four of them.
 //
 // The label goes below a maximum and above a minimum, which puts it inward
 // from the plot edge the extreme is pressed against, and its x is clamped so
-// it cannot hang outside the plot. Four of these on one 1-bit chart is the
-// busiest thing on the page; if it reads as clutter on the glass, dropping
-// humidity's pair is one branch here.
+// it cannot hang outside the plot.
 void draw_extreme(lv_obj_t* parent, const Rect plot, const ChartPoint at,
-                  const std::string& value, const std::string& when,
-                  bool is_maximum) {
+                  const std::string& value, bool is_maximum) {
   line_segment(parent, at.x - 3, at.y - 1, 7, 2);
 
-  std::string caption = value;
-  if (!when.empty()) caption += " " + when;
-
-  constexpr int kLabelWidth = 92;
+  const std::string& caption = value;
+  constexpr int kLabelWidth = 44;
   constexpr int kLabelHeight = 16;
   int x = at.x - kLabelWidth / 2;
   x = std::max(plot.x, std::min(x, plot.right() - kLabelWidth));
@@ -202,9 +208,8 @@ void draw_extreme(lv_obj_t* parent, const Rect plot, const ChartPoint at,
         small_font(), LV_TEXT_ALIGN_CENTER);
 }
 
-void draw_extremes(lv_obj_t* parent, const Rect plot,
-                   const app_core::IndoorData& indoor, const Series& series,
-                   bool temperature) {
+void draw_extremes(lv_obj_t* parent, const Rect plot, std::size_t origin,
+                   const Series& series, bool temperature) {
   // One point is its own minimum and maximum; labelling it twice says
   // nothing twice. Two identical labels on top of each other is also how a
   // flat series would render, so both cases fall out of the same check.
@@ -221,19 +226,20 @@ void draw_extremes(lv_obj_t* parent, const Rect plot,
     return std::string(buffer);
   };
 
-  draw_extreme(parent, plot,
-               plot_point(plot, series.maximum_index, series, series.maximum),
-               caption(series.maximum), time_at(indoor, series.maximum_index),
-               true);
-  draw_extreme(parent, plot,
-               plot_point(plot, series.minimum_index, series, series.minimum),
-               caption(series.minimum), time_at(indoor, series.minimum_index),
-               false);
+  draw_extreme(
+      parent, plot,
+      plot_point(plot, series.maximum_index, origin, series, series.maximum),
+      caption(series.maximum), true);
+  draw_extreme(
+      parent, plot,
+      plot_point(plot, series.minimum_index, origin, series, series.minimum),
+      caption(series.minimum), false);
 }
 
-// Solid bar or dashes, matching how the series is drawn. This is what binds
-// a stroke to a measure; without it the two lines are anonymous shapes.
-void legend_swatch(lv_obj_t* parent, const Rect bounds, bool dashed) {
+// Solid bar or dashes, matching how the series' curve is drawn. Sits beside
+// the reading in the header, so the stroke is identified where the measure
+// is named rather than in a legend the eye has to carry back to the plot.
+void stroke_swatch(lv_obj_t* parent, const Rect bounds, bool dashed) {
   const int y = bounds.y + bounds.height / 2 - kDataLineWidth / 2;
   if (!dashed) {
     line_segment(parent, bounds.x, y, bounds.width, kDataLineWidth);
@@ -246,18 +252,40 @@ void legend_swatch(lv_obj_t* parent, const Rect bounds, bool dashed) {
   }
 }
 
-void draw_legend(lv_obj_t* parent, const Rect bounds, bool temperature_drawn,
-                 bool humidity_drawn) {
-  const int cluster = 34;
-  int x = bounds.x + (bounds.width - cluster * 2 - 12) / 2;
-  if (temperature_drawn) {
-    legend_swatch(parent, {x, bounds.y, 14, bounds.height}, false);
-    temperature_icon(parent, {x + 18, bounds.y + 1, 13, bounds.height - 2});
+// A dotted rule at every whole hour inside the window.
+//
+// This is how the chart says how wide it is: the span changes as the ring
+// fills, so a fixed "8 h" caption would be wrong most of the time, and a
+// label per point was more numbers than the question deserved. Counting
+// rules answers it at a glance.
+//
+// 1 px and dotted, which the panel allows for grids where it would not for
+// data - a hairline rule cannot be mistaken for a third series.
+//
+// Needs the clock: an hour boundary is a wall-clock fact, and without a
+// synced time there is nothing to anchor one to. Nothing is drawn then,
+// exactly as the axis labels draw nothing.
+void draw_hour_rules(lv_obj_t* parent, const Rect plot,
+                     const app_core::IndoorData& indoor, std::size_t origin) {
+  if (!indoor.history_time_known || indoor.history_interval_minutes == 0) {
+    return;
   }
-  x += cluster + 12;
-  if (humidity_drawn) {
-    legend_swatch(parent, {x, bounds.y, 14, bounds.height}, true);
-    humidity_icon(parent, {x + 18, bounds.y + 1, 13, bounds.height - 2});
+  const std::size_t span_slots = app_core::kIndoorHistoryPoints - 1 - origin;
+  if (span_slots == 0) return;
+  const int span_minutes =
+      static_cast<int>(span_slots) *
+      static_cast<int>(indoor.history_interval_minutes);
+  if (span_minutes <= 0) return;
+
+  const ClockHm start = time_minus_minutes(indoor.history_newest_hour,
+                                           indoor.history_newest_minute,
+                                           span_minutes);
+  for (int offset = minutes_to_next_hour(start.minute); offset <= span_minutes;
+       offset += 60) {
+    const int x = plot.x + offset * (plot.width - 1) / span_minutes;
+    for (int y = plot.y; y < plot.bottom(); y += 4) {
+      line_segment(parent, x, y, 1, 2);
+    }
   }
 }
 
@@ -304,7 +332,11 @@ void render_indoor(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
   const Series temperature = series_of(snapshot.indoor, true);
   const Series humidity = series_of(snapshot.indoor, false);
 
+  // Each measure once: the stroke its curve uses, its icon, the reading, and
+  // the arrow for what that reading just did.
   char reading[24];
+  stroke_swatch(parent, layout.temperature_swatch, false);
+  temperature_icon(parent, layout.temperature_icon);
   std::snprintf(reading, sizeof(reading), "%s",
                 temperature_text(snapshot.indoor.temperature_c, 1).c_str());
   label(parent, reading, layout.temperature, reading_font(),
@@ -312,6 +344,8 @@ void render_indoor(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
   trend_icon(parent, layout.temperature_trend,
              trend_of(temperature, kTemperatureTrend));
 
+  stroke_swatch(parent, layout.humidity_swatch, true);
+  humidity_icon(parent, layout.humidity_icon);
   std::snprintf(reading, sizeof(reading), "%u%%",
                 snapshot.indoor.humidity_percent);
   label(parent, reading, layout.humidity, reading_font(), LV_TEXT_ALIGN_RIGHT);
@@ -336,22 +370,25 @@ void render_indoor(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
   // scale: a degree and a percent have no common axis, and whichever series
   // had the narrower range would flatten into a straight line that reads as
   // a room holding still when it is not.
+  // The oldest slot either series has a reading in is the chart's left edge,
+  // so the whole width is spent on history that exists - see
+  // indoor_history_origin(). Rules first, so the curves sit over them.
+  const std::size_t origin = indoor_history_origin(snapshot.indoor);
+  draw_hour_rules(parent, layout.plot, snapshot.indoor, origin);
   if (draw_temperature) {
-    draw_series(parent, layout.plot, temperature, false);
-    draw_extremes(parent, layout.plot, snapshot.indoor, temperature, true);
+    draw_series(parent, layout.plot, origin, temperature, false);
+    draw_extremes(parent, layout.plot, origin, temperature, true);
   }
   if (draw_humidity) {
-    draw_series(parent, layout.plot, humidity, true);
-    draw_extremes(parent, layout.plot, snapshot.indoor, humidity, false);
+    draw_series(parent, layout.plot, origin, humidity, true);
+    draw_extremes(parent, layout.plot, origin, humidity, false);
   }
 
-  draw_legend(parent, layout.legend, draw_temperature, draw_humidity);
-
-  // The axis says how wide the window actually is. Drawn only with a synced
-  // clock: an unsynced device's idea of the time is a compile-time guess,
-  // and labelling an axis from it would invent the one thing the axis is
-  // there to report.
-  const std::string oldest = time_at(snapshot.indoor, 0);
+  // The axis says how wide the window actually turned out to be. Drawn only
+  // with a synced clock: an unsynced device's idea of the time is a
+  // compile-time guess, and labelling an axis from it would invent the one
+  // thing the axis is there to report.
+  const std::string oldest = time_at(snapshot.indoor, origin);
   const std::string newest =
       time_at(snapshot.indoor, app_core::kIndoorHistoryPoints - 1);
   if (!oldest.empty()) {

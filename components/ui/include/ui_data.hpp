@@ -1467,32 +1467,65 @@ constexpr ClockHm time_minus_minutes(uint8_t hour, uint8_t minute,
                  static_cast<uint8_t>(total % 60)};
 }
 
+// How far into the future the next whole hour is, from a given minute. Zero
+// when already on the hour, so a window starting at 07:00 gets a rule at its
+// own left edge rather than skipping to 08:00.
+constexpr int minutes_to_next_hour(uint8_t minute) {
+  return (60 - static_cast<int>(minute)) % 60;
+}
+
+// The oldest slot either series actually has a reading in, or
+// kIndoorHistoryPoints when neither has any.
+//
+// This is the chart's left edge, and it is why the plot is always full
+// width. An eight-hour window drawn on a board that has been recording for
+// ninety minutes puts the whole line in the right-hand fifth of the box with
+// nothing saying why the rest is blank. Anchoring to the oldest reading
+// instead spends the whole width on what exists, and the axis labels - which
+// come from the same index - say what span that turned out to be. Both
+// series share this one origin, or they would be drawn against two different
+// time axes in the same box.
+constexpr std::size_t indoor_history_origin(const app_core::IndoorData& indoor) {
+  for (std::size_t i = 0; i < app_core::kIndoorHistoryPoints; ++i) {
+    if (indoor.history[i].has_temperature || indoor.history[i].has_humidity) {
+      return i;
+    }
+  }
+  return app_core::kIndoorHistoryPoints;
+}
+
 // The indoor page, which is now mostly its chart.
 //
 // What this replaced is worth recording. The page used to spend y+25..83 on
 // a hero temperature, y+44 on the humidity beside it and y+98..161 on a
 // comfort band - a DRY/OK/HUMID bar with a tick on it - leaving 35 px for a
 // chart of one measure. The band said nothing the humidity figure above it
-// did not, and the hero's size was not buying enough to justify what it
-// cost the only part of the page that shows change over time. Readings and
-// their trend arrows now share one band at the top and the plot takes 160
-// px, nearly a fifth of the whole panel.
+// did not, and the hero's size was not buying enough to justify what it cost
+// the only part of the page that shows change over time.
+//
+// Each measure now appears once, in the header, as a group of four: the
+// stroke its curve is drawn with, its icon, the current reading, and the
+// trend arrow. Putting the stroke swatch beside the reading is what retired
+// the legend that used to sit under the plot, where it competed with the
+// time labels for the same row.
 struct IndoorLayout {
-  Rect title;              // "INDOOR"
-  Rect temperature;        // the current reading, right-aligned
-  Rect temperature_trend;  // its arrow, and the only place one is drawn
+  Rect title;                // "INDOOR"
+  Rect temperature_swatch;   // a sample of the stroke its curve uses
+  Rect temperature_icon;
+  Rect temperature;          // the current reading, right-aligned
+  Rect temperature_trend;    // its arrow, and the only place one is drawn
+  Rect humidity_swatch;
+  Rect humidity_icon;
   Rect humidity;
   Rect humidity_trend;
   Rect divider;
-  Rect plot;               // both series, and their min/max markers
-  Rect axis_oldest;        // time of the leftmost point
-  Rect axis_newest;        // time of the rightmost point
-  Rect legend;             // stroke swatch and measure icon, per series
+  Rect plot;                 // both curves, their markers and the hour rules
+  Rect axis_oldest;          // time of the leftmost point
+  Rect axis_newest;          // time of the rightmost point
 };
 
-// Two clusters of (swatch, measure icon), centred under the plot. No trend
-// arrow here: an arrow belongs beside the reading it describes, at the top.
-inline constexpr int kIndoorLegendWidth = 110;
+inline constexpr int kIndoorSwatchWidth = 14;
+inline constexpr int kIndoorMeasureIconWidth = 13;
 inline constexpr int kIndoorTrendIconWidth = 14;
 
 constexpr IndoorLayout indoor_layout(const Rect bounds) {
@@ -1500,36 +1533,49 @@ constexpr IndoorLayout indoor_layout(const Rect bounds) {
   const int full_width = bounds.width - 2 * inset;
   const int header_height = safe_text_box_height(26, kSetupMediumFontLineHeight);
   const int row_height = safe_text_box_height(18, kSetupSmallFontLineHeight);
+  const int header_y = bounds.y + 4;
 
-  // Laid out right to left from the panel edge, because the readings are
-  // right-aligned against their arrows and the arrows against the edge.
-  // Widths are the worst case with room to spare: "100%" and "-10.5°C" at
-  // montserrat_20 are nowhere near 70 and 110 px, and labels are
-  // LV_LABEL_LONG_DOT, so a wider string ellipsises and is logged in a debug
-  // build rather than overprinting its neighbour.
-  const int humidity_trend_x =
-      bounds.right() - inset - kIndoorTrendIconWidth;
-  const int humidity_x = humidity_trend_x - 4 - 70;
-  const int temperature_trend_x = humidity_x - 6 - kIndoorTrendIconWidth;
-  const int temperature_x = temperature_trend_x - 4 - 110;
+  // Laid out right to left from the panel edge, because each group is
+  // right-aligned against its own arrow and the arrows against the edge.
+  // The reading widths are the worst case with room to spare: at
+  // montserrat_20 "-10.5°C" measures about 66 px of the 90 it gets and
+  // "100%" about 50 of 58. Labels are LV_LABEL_LONG_DOT, so anything wider
+  // still ellipsises and is logged in a debug build rather than
+  // overprinting its neighbour.
+  const int temperature_width = 90;
+  const int humidity_width = 58;
+
+  const int humidity_trend_x = bounds.right() - inset - kIndoorTrendIconWidth;
+  const int humidity_x = humidity_trend_x - 4 - humidity_width;
+  const int humidity_icon_x = humidity_x - 4 - kIndoorMeasureIconWidth;
+  const int humidity_swatch_x = humidity_icon_x - 3 - kIndoorSwatchWidth;
+  const int temperature_trend_x =
+      humidity_swatch_x - 10 - kIndoorTrendIconWidth;
+  const int temperature_x = temperature_trend_x - 4 - temperature_width;
+  const int temperature_icon_x = temperature_x - 4 - kIndoorMeasureIconWidth;
+  const int temperature_swatch_x =
+      temperature_icon_x - 3 - kIndoorSwatchWidth;
 
   const int plot_y = bounds.y + 44;
   const int plot_height = 160;
   const int axis_y = plot_y + plot_height + 3;
 
   return IndoorLayout{
-      {bounds.x + inset, bounds.y + 8, 80, row_height},
-      {temperature_x, bounds.y + 4, 110, header_height},
-      {temperature_trend_x, bounds.y + 4, kIndoorTrendIconWidth,
-       header_height},
-      {humidity_x, bounds.y + 4, 70, header_height},
-      {humidity_trend_x, bounds.y + 4, kIndoorTrendIconWidth, header_height},
+      {bounds.x + inset, bounds.y + 8, 60, row_height},
+      {temperature_swatch_x, header_y, kIndoorSwatchWidth, header_height},
+      {temperature_icon_x, header_y + 3, kIndoorMeasureIconWidth,
+       header_height - 6},
+      {temperature_x, header_y, temperature_width, header_height},
+      {temperature_trend_x, header_y, kIndoorTrendIconWidth, header_height},
+      {humidity_swatch_x, header_y, kIndoorSwatchWidth, header_height},
+      {humidity_icon_x, header_y + 3, kIndoorMeasureIconWidth,
+       header_height - 6},
+      {humidity_x, header_y, humidity_width, header_height},
+      {humidity_trend_x, header_y, kIndoorTrendIconWidth, header_height},
       {bounds.x + inset, bounds.y + 36, full_width, kSeparatorWidth},
       {bounds.x + inset, plot_y, full_width, plot_height},
       {bounds.x + inset, axis_y, 80, row_height},
       {bounds.right() - inset - 80, axis_y, 80, row_height},
-      {bounds.x + (bounds.width - kIndoorLegendWidth) / 2, axis_y,
-       kIndoorLegendWidth, row_height},
   };
 }
 
@@ -1551,26 +1597,20 @@ static_assert(
     indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
             .title.right() <
         indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
-            .temperature.x,
-    "the indoor header readings do not overprint the page title");
+            .temperature_swatch.x,
+    "the header measure groups do not overprint the page title");
 static_assert(
     indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
-            .temperature_trend.right() <=
+            .temperature_trend.right() <
         indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
-            .humidity.x,
-    "the temperature trend arrow does not reach into the humidity reading");
+            .humidity_swatch.x,
+    "the two header measure groups do not run into each other");
 static_assert(
     indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
             .axis_oldest.right() <
         indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
-            .legend.x,
-    "the oldest-time label does not overprint the legend");
-static_assert(
-    indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
-            .legend.right() <
-        indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
             .axis_newest.x,
-    "the legend does not overprint the newest-time label");
+    "the two axis time labels cannot overprint each other");
 
 struct HomeLayout {
   Rect hero;
