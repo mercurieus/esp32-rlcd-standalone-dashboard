@@ -319,6 +319,82 @@ void humidity_icon(lv_obj_t* parent, Rect bounds, bool inverse) {
 
 namespace {
 
+// An arrowhead, built from stacked rectangles because that is all there is -
+// see draw_sun above for the same constraint. At this size the steps are no
+// coarser than the features this panel resolves anyway, where a true
+// diagonal would break into speckle on the way to the glass.
+//
+// Rows run widest-at-the-base to narrowest-at-the-point, so `pointing_up`
+// only decides which end the narrow row lands on.
+void draw_wedge(lv_obj_t* parent, int centre_x, int top_y, int width,
+                bool pointing_up, bool inverse) {
+  constexpr int kRows = 3;
+  constexpr int kRowHeight = 2;
+  for (int row = 0; row < kRows; ++row) {
+    const int step = pointing_up ? row : (kRows - 1 - row);
+    const int row_width = width * (step + 1) / kRows;
+    line_segment(parent, centre_x - row_width / 2, top_y + row * kRowHeight,
+                 row_width, kRowHeight, inverse);
+  }
+}
+
+constexpr int kWedgeHeight = 3 * 2;  // kRows * kRowHeight above.
+
+}  // namespace
+
+void trend_icon(lv_obj_t* parent, Rect bounds, TrendKind kind, bool inverse) {
+  const int centre_x = bounds.x + bounds.width / 2;
+  const int width = std::max(7, std::min(bounds.width, 11));
+
+  switch (kind) {
+    case TrendKind::None:
+      // Nothing was measured, so nothing is drawn. A flat bar here would be
+      // the fabricated "unchanged" this page refuses everywhere else.
+      return;
+
+    case TrendKind::Steady: {
+      const int bar = std::max(2, bounds.height / 5);
+      line_segment(parent, centre_x - width / 2,
+                   bounds.y + (bounds.height - bar) / 2, width, bar, inverse);
+      return;
+    }
+
+    case TrendKind::Up:
+    case TrendKind::Down: {
+      const bool up = kind == TrendKind::Up;
+      const int stem_height = std::max(2, bounds.height / 3);
+      const int stem_width = std::max(2, width / 4);
+      const int block = kWedgeHeight + stem_height;
+      const int top = bounds.y + (bounds.height - block) / 2;
+      // The stem sits on the far side from the point, so head and stem read
+      // as one arrow rather than a wedge floating over a dash.
+      draw_wedge(parent, centre_x, up ? top : top + stem_height, width, up,
+                 inverse);
+      line_segment(parent, centre_x - stem_width / 2,
+                   up ? top + kWedgeHeight : top, stem_width, stem_height,
+                   inverse);
+      return;
+    }
+
+    case TrendKind::SpikeUp:
+    case TrendKind::SpikeDown: {
+      // Two heads, the ordinary convention for "and sharply so". No stem:
+      // the second head is what carries the meaning at this size, and a
+      // stem under it would cost the gap that keeps the two heads apart.
+      const bool up = kind == TrendKind::SpikeUp;
+      constexpr int kGap = 1;
+      const int block = 2 * kWedgeHeight + kGap;
+      const int top = bounds.y + (bounds.height - block) / 2;
+      draw_wedge(parent, centre_x, top, width, up, inverse);
+      draw_wedge(parent, centre_x, top + kWedgeHeight + kGap, width, up,
+                 inverse);
+      return;
+    }
+  }
+}
+
+namespace {
+
 // Regenerate exactly with: python3 scripts/svg-to-bitmap.py
 // components/ui/assets/wifi-high-bold.svg --width 20 --height 20 --fit viewbox
 // --threshold 0.35 --min-stroke 1 --emit-bytes kWifiHighBoldBitmap

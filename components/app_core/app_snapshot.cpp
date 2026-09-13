@@ -327,8 +327,18 @@ AppSnapshot make_mock_snapshot(DemoScenario scenario) {
   // layout fixtures, not readings, and the UI must show a NO DATA placeholder
   // until a real provider fills them in. Nothing on this snapshot may reach
   // the panel as though it were measured.
-  snapshot.indoor = {false, 24.8, 57, {24.2, 24.3, 24.5, 24.6,
-                                        24.7, 24.8, 24.8, 24.8}};
+  // Humidity's series is the widest text the readings row can be asked to
+  // draw rather than a flattering sample: -10.5 C alongside 100 %RH is the
+  // worst case indoor_history_layout() sizes its columns against, so a
+  // layout that only fits pleasant numbers fails here rather than on the
+  // panel in January.
+  snapshot.indoor = {false,
+                     24.8,
+                     57,
+                     {-10.5, 24.3, 24.5, 24.6, 24.7, 24.8, 24.8, 24.8},
+                     0,
+                     {100, 58, 57, 57, 56, 56, 57, 57},
+                     0};
   snapshot.availability = {};
 #ifdef APP_CORE_DEMO_MISSING_PAGE
   snapshot.availability.weather = false;

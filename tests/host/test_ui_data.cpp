@@ -430,3 +430,78 @@ HOST_TEST(the_trend_is_the_fallback_while_no_direction_has_been_measured) {
   battery.charging = true;
   EXPECT_TRUE(ui::battery_is_charging(battery, app_core::PowerTrend::Steady));
 }
+
+// --- trend_for_series: the sensor page's up/down/spike rule ----------------
+//
+// Thresholds are in each series' own integer unit - decidegrees for
+// temperature, whole percent for humidity - so one function serves both. The
+// samples are 30 minutes apart (kIndoorHistoryIntervalMs), which is what
+// makes 1.0 C or 5 %RH a spike rather than a normal drift.
+
+HOST_TEST(trend_reads_only_the_latest_step) {
+  // An enormous move earlier in the window says nothing about what the room
+  // is doing now. This is the whole semantic: the icon describes the newest
+  // step, not the window.
+  const std::array<int, 8> samples{200, 400, 240, 241, 0, 0, 0, 0};
+  EXPECT_TRUE(ui::trend_for_series(samples, 4, ui::kTemperatureTrend) ==
+              ui::TrendKind::Steady);
+}
+
+HOST_TEST(trend_needs_two_points_before_it_claims_anything) {
+  // None is absence, Steady is a measurement - the same distinction
+  // PowerTrend::Unknown draws against PowerTrend::Steady. A page that drew
+  // "steady" from one reading would be asserting something nobody measured.
+  const std::array<int, 8> samples{240, 0, 0, 0, 0, 0, 0, 0};
+  EXPECT_TRUE(ui::trend_for_series(samples, 0, ui::kTemperatureTrend) ==
+              ui::TrendKind::None);
+  EXPECT_TRUE(ui::trend_for_series(samples, 1, ui::kTemperatureTrend) ==
+              ui::TrendKind::None);
+}
+
+HOST_TEST(trend_thresholds_are_inclusive_at_both_temperature_bands) {
+  // 0.1 C of drift is the sensor breathing, not a direction.
+  const std::array<int, 8> drift{240, 241, 0, 0, 0, 0, 0, 0};
+  EXPECT_TRUE(ui::trend_for_series(drift, 2, ui::kTemperatureTrend) ==
+              ui::TrendKind::Steady);
+
+  // Exactly 0.2 C counts as a direction, and exactly 1.0 C as a spike:
+  // both bands are ">=", so a value sitting on the boundary reads as the
+  // stronger of the two rather than falling between them.
+  const std::array<int, 8> up{240, 242, 0, 0, 0, 0, 0, 0};
+  EXPECT_TRUE(ui::trend_for_series(up, 2, ui::kTemperatureTrend) ==
+              ui::TrendKind::Up);
+  const std::array<int, 8> spike_up{240, 250, 0, 0, 0, 0, 0, 0};
+  EXPECT_TRUE(ui::trend_for_series(spike_up, 2, ui::kTemperatureTrend) ==
+              ui::TrendKind::SpikeUp);
+
+  const std::array<int, 8> down{242, 240, 0, 0, 0, 0, 0, 0};
+  EXPECT_TRUE(ui::trend_for_series(down, 2, ui::kTemperatureTrend) ==
+              ui::TrendKind::Down);
+  const std::array<int, 8> spike_down{250, 240, 0, 0, 0, 0, 0, 0};
+  EXPECT_TRUE(ui::trend_for_series(spike_down, 2, ui::kTemperatureTrend) ==
+              ui::TrendKind::SpikeDown);
+}
+
+HOST_TEST(trend_uses_humiditys_own_bands_not_temperatures) {
+  // 1 %RH is a direction and 5 %RH is a spike - a whole percent is the
+  // finest thing HistorySample stores, so the bands cannot be any tighter.
+  const std::array<int, 8> up{55, 56, 0, 0, 0, 0, 0, 0};
+  EXPECT_TRUE(ui::trend_for_series(up, 2, ui::kHumidityTrend) ==
+              ui::TrendKind::Up);
+  const std::array<int, 8> spike{55, 60, 0, 0, 0, 0, 0, 0};
+  EXPECT_TRUE(ui::trend_for_series(spike, 2, ui::kHumidityTrend) ==
+              ui::TrendKind::SpikeUp);
+  // The same step read against temperature's bands would be a spike, which
+  // is exactly why the thresholds travel with the series.
+  const std::array<int, 8> flat{55, 55, 0, 0, 0, 0, 0, 0};
+  EXPECT_TRUE(ui::trend_for_series(flat, 2, ui::kHumidityTrend) ==
+              ui::TrendKind::Steady);
+}
+
+HOST_TEST(trend_clamps_a_count_past_the_end_of_the_array) {
+  // Same defensive clamp normalize_chart_samples_n makes: a count larger
+  // than the array would otherwise read past it.
+  const std::array<int, 8> samples{240, 242, 244, 246, 248, 250, 252, 260};
+  EXPECT_TRUE(ui::trend_for_series(samples, 99, ui::kTemperatureTrend) ==
+              ui::TrendKind::SpikeUp);
+}

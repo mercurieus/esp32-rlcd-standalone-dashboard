@@ -54,6 +54,18 @@ struct TileTextLayout {
 // weather_icon below for the bold silhouette each one draws.
 enum class WeatherIconKind { Sun, Cloud, Rain, Snow };
 
+// Which way a sensor series moved on its latest step, and how hard - drawn
+// beside that series' newest value on the indoor page. See
+// trend_for_series() in ui_data.hpp for the thresholds, which are per-series
+// because a degree and a percent are not comparable quantities.
+//
+// None is not a sixth direction: it means fewer than two readings exist, so
+// nothing has been measured to have a direction. Steady is the opposite - a
+// measurement that came out flat. The same distinction PowerTrend draws
+// between Unknown and Steady, and for the same reason: a page that drew
+// "steady" from one reading would be asserting something nobody observed.
+enum class TrendKind { None, Steady, Up, Down, SpikeUp, SpikeDown };
+
 constexpr Rect safe_canvas() {
   return {kSafeMargin, kSafeMargin, kCanvasWidth - 2 * kSafeMargin,
           kCanvasHeight - 2 * kSafeMargin};
@@ -435,6 +447,11 @@ void weather_icon(lv_obj_t* parent, Rect bounds, WeatherIconKind kind,
                   bool inverse = false);
 void temperature_icon(lv_obj_t* parent, Rect bounds, bool inverse = false);
 void humidity_icon(lv_obj_t* parent, Rect bounds, bool inverse = false);
+// The arrow beside a sensor reading on the indoor page. TrendKind::None
+// draws nothing at all, which is the whole point of it existing separately
+// from Steady - see the enum's own comment.
+void trend_icon(lv_obj_t* parent, Rect bounds, TrendKind kind,
+                bool inverse = false);
 // Fills the bottom band on pages where the buttons do something other than
 // turn pages. A no-op when hints.visible is false.
 WifiIconParts wifi_icon(lv_obj_t* parent, Rect bounds, bool connected);

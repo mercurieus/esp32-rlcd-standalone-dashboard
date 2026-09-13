@@ -19,7 +19,6 @@ enum class Text : uint16_t {
   NoData,
   NoIntradayData,
   StaleSuffix,
-  ComfortBand,
 
   SetupTitle,
   SetupNoSsid,
@@ -81,8 +80,6 @@ enum class Text : uint16_t {
   StatusAlert,
   StatusLowBattery,
   StatusOvervoltage,
-  StatusDry,
-  StatusHumid,
   ChartOpen,
   ChartMid,
   ChartClose,

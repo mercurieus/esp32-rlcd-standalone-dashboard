@@ -991,9 +991,15 @@ constexpr uint32_t kIndoorHistoryIntervalMs = 30 * 60'000;
   uint8_t history_count = app_core::history_recent_temperatures(
       history_store::current(), history.data(),
       static_cast<uint8_t>(history.size()));
-  if (history_count > 0) {
-    ESP_LOGI(kTag, "indoor history: seeded %u point(s) from flash",
-             history_count);
+  std::array<uint8_t, 8> humidity_history{};
+  uint8_t humidity_history_count = app_core::history_recent_humidity(
+      history_store::current(), humidity_history.data(),
+      static_cast<uint8_t>(humidity_history.size()));
+  if (history_count > 0 || humidity_history_count > 0) {
+    ESP_LOGI(kTag,
+             "indoor history: seeded %u temperature and %u humidity point(s) "
+             "from flash",
+             history_count, humidity_history_count);
   }
   uint32_t since_history_ms = kIndoorHistoryIntervalMs;  // record immediately
   for (;;) {
@@ -1025,13 +1031,30 @@ constexpr uint32_t kIndoorHistoryIntervalMs = 30 * 60'000;
           }
           history[history.size() - 1] = indoor.temperature_c;
         }
-        ESP_LOGI(kTag, "indoor history: %u/%u points, newest %.1f C",
+        // Appended in the same branch, on the same tick, from the same
+        // reading: that is what makes index i of the two arrays the same
+        // moment, which the chart relies on to draw them against one time
+        // axis. Anything that appends one without the other silently shears
+        // the two series apart.
+        if (humidity_history_count < humidity_history.size()) {
+          humidity_history[humidity_history_count++] = indoor.humidity_percent;
+        } else {
+          for (std::size_t i = 1; i < humidity_history.size(); ++i) {
+            humidity_history[i - 1] = humidity_history[i];
+          }
+          humidity_history[humidity_history.size() - 1] =
+              indoor.humidity_percent;
+        }
+        ESP_LOGI(kTag,
+                 "indoor history: %u/%u points, newest %.1f C / %u%%",
                  history_count, static_cast<unsigned>(history.size()),
-                 indoor.temperature_c);
+                 indoor.temperature_c, indoor.humidity_percent);
       }
     }
     indoor.temperature_history_c = history;
     indoor.temperature_history_count = history_count;
+    indoor.humidity_history_percent = humidity_history;
+    indoor.humidity_history_count = humidity_history_count;
 
     wifi_provision::set_indoor(indoor);
     vTaskDelay(pdMS_TO_TICKS(kIndoorSamplePeriodMs));

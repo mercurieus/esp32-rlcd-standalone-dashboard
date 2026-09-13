@@ -1392,6 +1392,138 @@ constexpr MarketRange market_intraday_range(
   return range;
 }
 
+// The two bands that turn a step into a TrendKind, in whatever integer unit
+// the series itself is kept in. Carrying them per-series rather than
+// hardcoding one pair is the point: the indoor chart holds temperature in
+// decidegrees and humidity in whole percent, and 5 of one is nothing like 5
+// of the other.
+struct TrendThresholds {
+  // Smallest step that counts as a direction at all. Below it the reading is
+  // the sensor breathing and the icon says Steady.
+  int move;
+  // At or above this the step is a spike rather than ordinary drift.
+  int spike;
+};
+
+// 0.2 C to call a direction, 1.0 C to call it a spike, in decidegrees - the
+// unit MarketData-style int samples are kept in for the chart (the SHTC3
+// resolves finer than 0.2 C, but HistorySample stores decidegrees and a
+// tenth of a degree over half an hour is not a direction anybody wants
+// drawn).
+inline constexpr TrendThresholds kTemperatureTrend{2, 10};
+// 1 %RH and 5 %RH. A whole percent is the finest thing HistorySample keeps,
+// so the lower band cannot be tighter than this.
+inline constexpr TrendThresholds kHumidityTrend{1, 5};
+
+// Which way the series moved on its most recent step.
+//
+// The latest step and nothing else: this answers "what is the room doing
+// now", so an excursion earlier in the window - however large - has already
+// been drawn on the chart and must not colour the icon. The alternative
+// (fit the whole window) was considered and rejected for exactly that: it
+// would keep pointing at an hour-old event while the room sat still.
+//
+// Templated on N for the same reason normalize_chart_samples_n is.
+template <std::size_t N>
+constexpr TrendKind trend_for_series(const std::array<int, N>& samples,
+                                     std::size_t count,
+                                     const TrendThresholds thresholds) {
+  if (count > samples.size()) count = samples.size();
+  // One reading is not a step. See TrendKind::None's own comment for why
+  // this is not Steady.
+  if (count < 2) return TrendKind::None;
+  const int delta = samples[count - 1] - samples[count - 2];
+  const int magnitude = delta < 0 ? -delta : delta;
+  if (magnitude >= thresholds.spike) {
+    return delta > 0 ? TrendKind::SpikeUp : TrendKind::SpikeDown;
+  }
+  if (magnitude >= thresholds.move) {
+    return delta > 0 ? TrendKind::Up : TrendKind::Down;
+  }
+  return TrendKind::Steady;
+}
+
+// The indoor page's history block - everything below the humidity readout.
+//
+// Only this half of the page is derived here. The title, the hero
+// temperature and the RH figure above it are unchanged and stay as literals
+// in render_indoor.cpp; pulling them in too would be churn in code this
+// change does not otherwise touch.
+//
+// What was here before is worth recording: a comfort band (a DRY/OK/HUMID
+// bar with a tick at the current humidity) occupied y+98..161, and it is
+// what paid for this block. Once humidity is a charted series with its own
+// value and trend icon, the band was a coarser restatement of the RH number
+// printed directly above it, and it was the only 63 px on the page large
+// enough to hold a chart worth reading.
+struct IndoorHistoryLayout {
+  Rect title;   // "HISTORY"
+  Rect legend;  // stroke swatch, measure icon and trend arrow, per series
+  Rect plot;    // both series share this box - see render_indoor.cpp
+  Rect oldest;  // the leftmost point's readings, as text
+  Rect newest;  // the rightmost point's readings, as text
+};
+
+// Wide enough for two clusters of (swatch, measure icon, trend arrow) with
+// gaps. Sized here rather than in the renderer so the static_assert below
+// proves the cluster cannot collide with the "HISTORY" label beside it.
+inline constexpr int kIndoorLegendWidth = 140;
+
+constexpr IndoorHistoryLayout indoor_history_layout(const Rect bounds) {
+  const int row_height = safe_text_box_height(18, kSetupSmallFontLineHeight);
+  const int inset = 8;
+  const int full_width = bounds.width - 2 * inset;
+  // Two columns with a gap between them, so the oldest and newest readings
+  // cannot run into each other however wide their text gets. The worst case
+  // is "-10.5C 100%" - eleven characters of montserrat_14, comfortably under
+  // half of the 372 px this leaves each column on a 388 px page. Labels are
+  // LV_LABEL_LONG_DOT, so an unexpectedly wider string ellipsises and gets
+  // logged in a debug build rather than overprinting its neighbour.
+  const int column = full_width / 2 - 4;
+  const int values_y = bounds.y + 209;
+  return IndoorHistoryLayout{
+      {bounds.x + inset, bounds.y + 95, 90, row_height},
+      {bounds.right() - inset - kIndoorLegendWidth, bounds.y + 95,
+       kIndoorLegendWidth, row_height},
+      {bounds.x + inset, bounds.y + 120, full_width, 86},
+      {bounds.x + inset, values_y, column, row_height},
+      {bounds.right() - inset - column, values_y, column, row_height},
+  };
+}
+
+// The whole block stays inside the tray-reduced content area, and the legend
+// never reaches back into the title beside it. Proved against the absolute
+// safe_canvas() frame, the same convention every other layout proof here
+// uses.
+static_assert(
+    rect_within(content_bounds(safe_canvas(), app_core::PageId::Indoor),
+                indoor_history_layout(
+                    content_bounds(safe_canvas(), app_core::PageId::Indoor))
+                    .plot),
+    "the indoor history plot stays inside the content bounds");
+static_assert(
+    rect_within(content_bounds(safe_canvas(), app_core::PageId::Indoor),
+                indoor_history_layout(
+                    content_bounds(safe_canvas(), app_core::PageId::Indoor))
+                    .newest),
+    "the indoor newest-readings label stays inside the content bounds");
+static_assert(
+    indoor_history_layout(
+        content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .title.right() <
+        indoor_history_layout(
+            content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .legend.x,
+    "the indoor legend cluster does not overlap the HISTORY label");
+static_assert(
+    indoor_history_layout(
+        content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .oldest.right() <
+        indoor_history_layout(
+            content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .newest.x,
+    "the indoor oldest and newest readings cannot overprint each other");
+
 struct HomeLayout {
   Rect hero;
   Rect date;
