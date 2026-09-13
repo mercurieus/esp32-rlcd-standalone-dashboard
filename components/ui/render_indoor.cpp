@@ -252,15 +252,32 @@ void stroke_swatch(lv_obj_t* parent, const Rect bounds, bool dashed) {
   }
 }
 
-// A dotted rule at every whole hour inside the window.
+// A hairline rule at every whole hour inside the window.
 //
 // This is how the chart says how wide it is: the span changes as the ring
 // fills, so a fixed "8 h" caption would be wrong most of the time, and a
 // label per point was more numbers than the question deserved. Counting
 // rules answers it at a glance.
 //
-// 1 px and dotted, which the panel allows for grids where it would not for
-// data - a hairline rule cannot be mistaken for a third series.
+// 1 px, which the panel allows for grids where it would not for data - and
+// that width is the whole separation: every stroke this page draws for a
+// measurement is 2 px or more, so a hairline cannot be read as a third
+// series.
+//
+// One object per rule, and that is a hard constraint rather than a style
+// preference. This drew each rule as a column of 2 px dashes stepping 4 px
+// down the plot, which is 40 lv_objs per rule; at 8 rules across a 7.5 h
+// window that is 320 widgets on top of the ~150 the curves, markers and
+// header already cost, against a 64 KB LVGL heap
+// (CONFIG_LV_MEM_SIZE_KILOBYTES). lv_malloc returned null, LVGL 9 does not
+// check it, and the page panicked with StoreProhibited inside
+// lv_obj_class_create_obj - every time the Indoor page came round, which is
+// a reboot loop rather than a glitch.
+//
+// It hid until the network came up, because of the guard directly below:
+// with no clock there are no rules, so the page fit. Nothing in the type
+// system counts widgets, so the count lives here - anything added to this
+// loop is paid for once per hour drawn, not once per page.
 //
 // Needs the clock: an hour boundary is a wall-clock fact, and without a
 // synced time there is nothing to anchor one to. Nothing is drawn then,
@@ -283,9 +300,7 @@ void draw_hour_rules(lv_obj_t* parent, const Rect plot,
   for (int offset = minutes_to_next_hour(start.minute); offset <= span_minutes;
        offset += 60) {
     const int x = plot.x + offset * (plot.width - 1) / span_minutes;
-    for (int y = plot.y; y < plot.bottom(); y += 4) {
-      line_segment(parent, x, y, 1, 2);
-    }
+    line_segment(parent, x, plot.y, 1, plot.height);
   }
 }
 
