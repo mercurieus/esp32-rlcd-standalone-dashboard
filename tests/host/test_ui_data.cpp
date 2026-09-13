@@ -108,7 +108,7 @@ HOST_TEST(comfort_band_label_uses_supported_ascii_glyphs) {
 
 HOST_TEST(new_york_fixture_is_distinct_from_taipei_weather) {
   const app_core::AppSnapshot snapshot =
-      app_core::make_mock_snapshot(app_core::DemoScenario::TaiwanSession);
+      app_core::make_mock_snapshot(app_core::DemoScenario::UaFxSession);
   EXPECT_EQ(snapshot.weather.current.location, std::string("Taipei"));
   EXPECT_EQ(snapshot.new_york_weather.current.location, std::string("New York"));
   EXPECT_EQ(snapshot.new_york_weather.current.condition, std::string("Sunny"));
@@ -118,7 +118,7 @@ HOST_TEST(new_york_fixture_is_distinct_from_taipei_weather) {
 
 HOST_TEST(indoor_fixture_has_non_flat_temperature_history) {
   const app_core::AppSnapshot snapshot =
-      app_core::make_mock_snapshot(app_core::DemoScenario::TaiwanSession);
+      app_core::make_mock_snapshot(app_core::DemoScenario::UaFxSession);
   EXPECT_EQ(snapshot.indoor.temperature_history_c,
             (std::array<double, 8>{24.2, 24.3, 24.5, 24.6,
                                    24.7, 24.8, 24.8, 24.8}));
@@ -165,7 +165,7 @@ HOST_TEST(weather_icon_kind_collapses_wmo_conditions_into_four_shapes) {
 
 HOST_TEST(home_tile_battery_overvoltage_outranks_a_weather_alert) {
   app_core::AppSnapshot snapshot =
-      app_core::make_mock_snapshot(app_core::DemoScenario::TaiwanSession);
+      app_core::make_mock_snapshot(app_core::DemoScenario::UaFxSession);
   snapshot.battery.valid = true;
   snapshot.battery.percent = 90;
   snapshot.battery.overvoltage_warning = true;
@@ -176,7 +176,7 @@ HOST_TEST(home_tile_battery_overvoltage_outranks_a_weather_alert) {
 
 HOST_TEST(home_tile_low_battery_also_outranks_a_weather_alert) {
   app_core::AppSnapshot snapshot =
-      app_core::make_mock_snapshot(app_core::DemoScenario::TaiwanSession);
+      app_core::make_mock_snapshot(app_core::DemoScenario::UaFxSession);
   snapshot.battery.valid = true;
   snapshot.battery.percent = ui::kHomeLowBatteryPercent;
   snapshot.battery.overvoltage_warning = false;
@@ -187,30 +187,30 @@ HOST_TEST(home_tile_low_battery_also_outranks_a_weather_alert) {
 
 HOST_TEST(home_tile_weather_alert_outranks_a_quiet_default) {
   app_core::AppSnapshot snapshot =
-      app_core::make_mock_snapshot(app_core::DemoScenario::TaiwanSession);
+      app_core::make_mock_snapshot(app_core::DemoScenario::UaFxSession);
   snapshot.battery.valid = true;
   snapshot.battery.percent = 90;
   snapshot.battery.overvoltage_warning = false;
   snapshot.weather.valid = true;
   snapshot.weather.alert = true;
-  snapshot.taiwan_market.valid = true;
+  snapshot.ua_fx.valid = true;
   EXPECT_TRUE(ui::choose_home_tile(snapshot) == ui::HomeTileKind::Weather);
 }
 
 HOST_TEST(home_tile_falls_back_to_weather_market_indoor_in_order_when_quiet) {
   app_core::AppSnapshot snapshot =
-      app_core::make_mock_snapshot(app_core::DemoScenario::TaiwanSession);
+      app_core::make_mock_snapshot(app_core::DemoScenario::UaFxSession);
   snapshot.battery.valid = false;
   snapshot.weather.valid = true;
   snapshot.weather.alert = false;
-  snapshot.taiwan_market.valid = true;
+  snapshot.ua_fx.valid = true;
   snapshot.indoor.valid = true;
   EXPECT_TRUE(ui::choose_home_tile(snapshot) == ui::HomeTileKind::Weather);
 
   snapshot.weather.valid = false;
   EXPECT_TRUE(ui::choose_home_tile(snapshot) == ui::HomeTileKind::Market);
 
-  snapshot.taiwan_market.valid = false;
+  snapshot.ua_fx.valid = false;
   EXPECT_TRUE(ui::choose_home_tile(snapshot) == ui::HomeTileKind::Indoor);
 
   snapshot.indoor.valid = false;
@@ -221,21 +221,21 @@ HOST_TEST(home_tile_falls_back_to_weather_market_indoor_in_order_when_quiet) {
 
 HOST_TEST(home_tile_skips_an_invalid_candidate_instead_of_showing_no_data) {
   app_core::AppSnapshot snapshot =
-      app_core::make_mock_snapshot(app_core::DemoScenario::TaiwanSession);
+      app_core::make_mock_snapshot(app_core::DemoScenario::UaFxSession);
   snapshot.battery.valid = false;
   snapshot.weather.valid = false;
   snapshot.weather.alert = true;  // alert flag on invalid data must not count
-  snapshot.taiwan_market.valid = true;
+  snapshot.ua_fx.valid = true;
   snapshot.indoor.valid = true;
   EXPECT_TRUE(ui::choose_home_tile(snapshot) == ui::HomeTileKind::Market);
 }
 
 HOST_TEST(home_tile_is_none_when_nothing_at_all_is_valid) {
   app_core::AppSnapshot snapshot =
-      app_core::make_mock_snapshot(app_core::DemoScenario::TaiwanSession);
+      app_core::make_mock_snapshot(app_core::DemoScenario::UaFxSession);
   snapshot.battery.valid = false;
   snapshot.weather.valid = false;
-  snapshot.taiwan_market.valid = false;
+  snapshot.ua_fx.valid = false;
   snapshot.indoor.valid = false;
   EXPECT_TRUE(ui::choose_home_tile(snapshot) == ui::HomeTileKind::None);
 }
@@ -259,7 +259,7 @@ HOST_TEST(page_dots_sit_centred_along_the_bottom_below_every_page) {
 
   // The band never overlaps what the page itself draws into.
   for (const app_core::PageId page :
-       {app_core::PageId::Home, app_core::PageId::TaiwanMarket,
+       {app_core::PageId::Home, app_core::PageId::UaFx,
         app_core::PageId::Weather, app_core::PageId::Indoor}) {
     EXPECT_TRUE(ui::content_bounds(canvas, page).bottom() <= band.y);
   }
@@ -284,7 +284,7 @@ HOST_TEST(home_shares_the_tray_and_content_area_with_the_data_pages) {
 
 HOST_TEST(forecast_fixture_contains_rain_probability_for_every_day) {
   const app_core::AppSnapshot snapshot =
-      app_core::make_mock_snapshot(app_core::DemoScenario::TaiwanSession);
+      app_core::make_mock_snapshot(app_core::DemoScenario::UaFxSession);
   EXPECT_EQ(snapshot.weather.seven_day[0].rain_probability_percent, 25);
   EXPECT_EQ(snapshot.weather.seven_day[1].rain_probability_percent, 70);
   EXPECT_EQ(snapshot.weather.seven_day[2].rain_probability_percent, 65);
@@ -300,11 +300,11 @@ HOST_TEST(forecast_fixture_contains_rain_probability_for_every_day) {
 // is not - never an empty half, and never a placeholder invented to fill it.
 HOST_TEST(home_shows_a_second_tile_only_when_it_has_real_data) {
   app_core::AppSnapshot snapshot =
-      app_core::make_mock_snapshot(app_core::DemoScenario::TaiwanSession);
+      app_core::make_mock_snapshot(app_core::DemoScenario::UaFxSession);
   snapshot.battery.valid = false;
   snapshot.weather.valid = true;
   snapshot.indoor.valid = true;
-  snapshot.taiwan_market.valid = false;
+  snapshot.ua_fx.valid = false;
 
   const ui::HomeTileKind first = ui::choose_home_tile(snapshot);
   const ui::HomeTileKind second = ui::choose_home_second_tile(snapshot, first);
@@ -314,7 +314,7 @@ HOST_TEST(home_shows_a_second_tile_only_when_it_has_real_data) {
 
   // With only one valid source there is no second tile.
   snapshot.indoor.valid = false;
-  snapshot.taiwan_market.valid = false;
+  snapshot.ua_fx.valid = false;
   snapshot.battery.valid = false;
   const ui::HomeTileKind only = ui::choose_home_tile(snapshot);
   EXPECT_TRUE(ui::choose_home_second_tile(snapshot, only) ==

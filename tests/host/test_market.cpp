@@ -1,9 +1,8 @@
 #include "market_parse.hpp"
 #include "market_schedule.hpp"
-// Header-only constants (kRefreshIntervalSeconds,
-// kTaiwanFastRefreshIntervalSeconds) - market.cpp itself is not part of the
-// host build, but nothing here calls its functions, so including the
-// declarations is safe.
+// Header-only constants (kRefreshIntervalSeconds) - market.cpp itself is
+// not part of the host build, but nothing here calls its functions, so
+// including the declarations is safe.
 #include "market.hpp"
 
 #include "app_snapshot.hpp"
@@ -13,48 +12,21 @@
 
 namespace {
 
-// A realistic (trimmed) TWSE /v1/exchangeReport/MI_INDEX response: the real
-// endpoint returns one row per published index (~30-40 rows, ~46 KB
-// observed live); this keeps just a handful, including the two rows the
-// Taiwan page needs, with the real field names/values captured from a live
-// call while building this parser.
-constexpr char kTaiwanFullResponse[] = R"JSON([
-  {
-    "日期": "1150814",
-    "指數": "寶島股價指數",
-    "收盤指數": "50839.65",
-    "漲跌": "-",
-    "漲跌點數": "262.51",
-    "漲跌百分比": "-0.51",
-    "特殊處理註記": ""
-  },
-  {
-    "日期": "1150814",
-    "指數": "發行量加權股價指數",
-    "收盤指數": "45811.01",
-    "漲跌": "-",
-    "漲跌點數": "210.47",
-    "漲跌百分比": "-0.46",
-    "特殊處理註記": ""
-  },
-  {
-    "日期": "1150814",
-    "指數": "臺灣公司治理100指數",
-    "收盤指數": "28536.09",
-    "漲跌": "-",
-    "漲跌點數": "150.80",
-    "漲跌百分比": "-0.53",
-    "特殊處理註記": ""
-  },
-  {
-    "日期": "1150814",
-    "指數": "臺灣50指數",
-    "收盤指數": "42499.44",
-    "漲跌": "-",
-    "漲跌點數": "285.79",
-    "漲跌百分比": "-0.67",
-    "特殊處理註記": ""
-  }
+// A realistic (trimmed) NBU /statdirectory/exchange response: the real
+// endpoint returns one row per published currency (~50 rows), one shared
+// exchangedate per response, and always JSON numbers (not TWSE-style
+// numeric strings) for rate - field names/values captured from a live call
+// while building this parser.
+constexpr char kNbuFullResponse[] = R"JSON([
+{
+  "r030":12,"txt":"Алжирський динар","rate":0.33473,"cc":"DZD","exchangedate":"13.09.2026","special":null
+}
+,{
+  "r030":840,"txt":"Долар США","rate":44.5526,"cc":"USD","exchangedate":"13.09.2026","special":"N"
+}
+,{
+  "r030":978,"txt":"Євро","rate":51.6817,"cc":"EUR","exchangedate":"13.09.2026","special":null
+}
 ])JSON";
 
 // meta block matches a real ^GSPC chart response observed live; close[] is
@@ -88,38 +60,38 @@ constexpr char kYahooFullResponse[] = R"JSON({
 
 }  // namespace
 
-HOST_TEST(market_parse_taiwan_index_full_response_is_valid) {
+HOST_TEST(market_parse_nbu_rates_full_response_is_valid) {
   app_core::MarketData data;
-  const bool ok = market::parse_taiwan_index(
-      kTaiwanFullResponse, std::strlen(kTaiwanFullResponse), data);
+  const bool ok = market::parse_nbu_rates(
+      kNbuFullResponse, std::strlen(kNbuFullResponse), data);
 
   EXPECT_TRUE(ok);
   EXPECT_TRUE(data.valid);
-  EXPECT_EQ(data.primary_label, std::string("TAIEX"));
-  EXPECT_EQ(data.primary_value, 45811);
-  EXPECT_TRUE(data.primary_change_percent > -0.47 &&
-              data.primary_change_percent < -0.45);
-  EXPECT_EQ(data.secondary_label, std::string("TW50"));
-  EXPECT_EQ(data.secondary_value, 42499);
-  EXPECT_TRUE(data.secondary_change_percent > -0.68 &&
-              data.secondary_change_percent < -0.66);
+  EXPECT_TRUE(data.value_has_decimals);
+  EXPECT_EQ(data.primary_label, std::string("USD/UAH"));
+  EXPECT_EQ(data.primary_value, 4455);  // lround(44.5526 * 100)
+  EXPECT_EQ(data.secondary_label, std::string("EUR/UAH"));
+  EXPECT_EQ(data.secondary_value, 5168);  // lround(51.6817 * 100)
+  EXPECT_EQ(data.as_of_year, 2026);
+  EXPECT_EQ(data.as_of_month, 9);
+  EXPECT_EQ(data.as_of_day, 13);
 
-  // MI_INDEX carries no intraday series (it is a once-daily close) - every
-  // sample must be the real TAIEX close, never a zero default or an
-  // invented shape.
-  for (const int sample : data.intraday_samples) {
-    EXPECT_EQ(sample, 45811);
-  }
+  // A single day's response has no notion of "change" on its own - see
+  // parse_nbu_rates()'s own comment in market_parse.hpp. market.cpp's
+  // refresh_ua_fx() fills these in once it has both today's and
+  // yesterday's parsed rates.
+  EXPECT_TRUE(data.has_change);
+  EXPECT_TRUE(data.primary_change_percent == 0.0);
+  EXPECT_TRUE(data.secondary_change_percent == 0.0);
 }
 
-HOST_TEST(market_parse_taiwan_index_truncated_body_is_invalid_and_resets) {
-  const std::size_t cut = std::strlen(kTaiwanFullResponse) / 2;
+HOST_TEST(market_parse_nbu_rates_truncated_body_is_invalid_and_resets) {
+  const std::size_t cut = std::strlen(kNbuFullResponse) / 2;
 
   app_core::MarketData data;
   data.valid = true;  // pre-seed with a "good" value to prove it gets reset.
   data.primary_value = 99999;
-  const bool ok =
-      market::parse_taiwan_index(kTaiwanFullResponse, cut, data);
+  const bool ok = market::parse_nbu_rates(kNbuFullResponse, cut, data);
 
   EXPECT_TRUE(!ok);
   EXPECT_TRUE(!data.valid);
@@ -127,62 +99,44 @@ HOST_TEST(market_parse_taiwan_index_truncated_body_is_invalid_and_resets) {
   EXPECT_EQ(data.primary_label, std::string(""));
 }
 
-HOST_TEST(market_parse_taiwan_index_missing_required_field_is_invalid) {
-  // Same shape as the real row but the TAIEX entry is missing 收盤指數 -
+HOST_TEST(market_parse_nbu_rates_missing_required_field_is_invalid) {
+  // Same shape as the real row but the USD entry is missing "rate" -
   // syntactically valid JSON, not truncated.
   constexpr char kMissingField[] = R"JSON([
-    {
-      "指數": "發行量加權股價指數",
-      "漲跌": "-",
-      "漲跌點數": "210.47",
-      "漲跌百分比": "-0.46"
-    },
-    {
-      "指數": "臺灣50指數",
-      "收盤指數": "42499.44",
-      "漲跌": "-",
-      "漲跌點數": "285.79",
-      "漲跌百分比": "-0.67"
-    }
+    {"r030":840,"txt":"Долар США","cc":"USD","exchangedate":"13.09.2026"},
+    {"r030":978,"txt":"Євро","rate":51.6817,"cc":"EUR","exchangedate":"13.09.2026"}
   ])JSON";
 
   app_core::MarketData data;
-  const bool ok = market::parse_taiwan_index(
+  const bool ok = market::parse_nbu_rates(
       kMissingField, std::strlen(kMissingField), data);
 
   EXPECT_TRUE(!ok);
   EXPECT_TRUE(!data.valid);
 }
 
-HOST_TEST(market_parse_taiwan_index_unexpected_shape_is_invalid) {
-  // TWSE's own error/maintenance response is a JSON object, not the
+HOST_TEST(market_parse_nbu_rates_unexpected_shape_is_invalid) {
+  // A plausible error/maintenance response is a JSON object, not the
   // documented row array - a real "the shape changed" failure mode.
   constexpr char kUnexpectedShape[] =
       R"JSON({"error": "service temporarily unavailable"})JSON";
 
   app_core::MarketData data;
-  const bool ok = market::parse_taiwan_index(
+  const bool ok = market::parse_nbu_rates(
       kUnexpectedShape, std::strlen(kUnexpectedShape), data);
 
   EXPECT_TRUE(!ok);
   EXPECT_TRUE(!data.valid);
 }
 
-HOST_TEST(market_parse_taiwan_index_missing_target_rows_is_invalid) {
-  // Well-formed row array, but neither TAIEX nor TW50 is present in it -
-  // e.g. TWSE renames/drops the row this parser matches by name.
+HOST_TEST(market_parse_nbu_rates_missing_target_rows_is_invalid) {
+  // Well-formed row array, but neither USD nor EUR is present in it.
   constexpr char kOtherRowsOnly[] = R"JSON([
-    {
-      "指數": "寶島股價指數",
-      "收盤指數": "50839.65",
-      "漲跌": "-",
-      "漲跌點數": "262.51",
-      "漲跌百分比": "-0.51"
-    }
+    {"r030":12,"txt":"Алжирський динар","rate":0.33473,"cc":"DZD","exchangedate":"13.09.2026"}
   ])JSON";
 
   app_core::MarketData data;
-  const bool ok = market::parse_taiwan_index(
+  const bool ok = market::parse_nbu_rates(
       kOtherRowsOnly, std::strlen(kOtherRowsOnly), data);
 
   EXPECT_TRUE(!ok);
@@ -311,149 +265,6 @@ HOST_TEST(market_parse_yahoo_quote_malformed_json_is_invalid) {
                                              "S&P 500", quote);
   EXPECT_TRUE(!ok);
   EXPECT_TRUE(!quote.valid);
-}
-
-// --- select_taiwan_source: pure fallback-selection logic, no I/O -----------
-
-HOST_TEST(select_taiwan_source_primary_success_wins_and_carries_no_secondary) {
-  market::IndexQuote primary;
-  primary.valid = true;
-  primary.label = "TAIEX";
-  primary.value = 46050;
-  primary.has_intraday = true;
-  app_core::MarketData unused_fallback;
-
-  const market::TaiwanFetchOutcome outcome =
-      market::select_taiwan_source(true, primary, false, unused_fallback);
-
-  EXPECT_TRUE(outcome.ok);
-  EXPECT_TRUE(outcome.used_primary);
-  EXPECT_TRUE(outcome.data.valid);
-  EXPECT_EQ(outcome.data.primary_value, 46050);
-  EXPECT_TRUE(outcome.data.has_intraday);
-  // No secondary from a single-symbol source - see render_market_sidebar()
-  // in components/ui/render_shared.cpp for why an empty label hides the
-  // tile rather than showing a fabricated value.
-  EXPECT_EQ(outcome.data.secondary_label, std::string(""));
-}
-
-HOST_TEST(select_taiwan_source_falls_back_only_when_primary_fails) {
-  market::IndexQuote unused_primary;
-  app_core::MarketData fallback;
-  fallback.valid = true;
-  fallback.primary_label = "TAIEX";
-  fallback.primary_value = 45811;
-  fallback.secondary_label = "TW50";
-  fallback.secondary_value = 42499;
-
-  const market::TaiwanFetchOutcome outcome =
-      market::select_taiwan_source(false, unused_primary, true, fallback);
-
-  EXPECT_TRUE(outcome.ok);
-  // A fallback success must not be reported as the primary - the caller
-  // (market.cpp's taiwan_using_primary_source(), and this test's sibling
-  // below) relies on this to log which source actually served the data
-  // and to pick the right refresh interval.
-  EXPECT_TRUE(!outcome.used_primary);
-  EXPECT_TRUE(outcome.data.valid);
-  EXPECT_EQ(outcome.data.primary_value, 45811);
-  // The fallback's own TW50 secondary survives unchanged.
-  EXPECT_EQ(outcome.data.secondary_label, std::string("TW50"));
-  EXPECT_EQ(outcome.data.secondary_value, 42499);
-}
-
-HOST_TEST(select_taiwan_source_both_failing_publishes_nothing) {
-  market::IndexQuote unused_primary;
-  app_core::MarketData unused_fallback;
-  unused_fallback.valid = true;  // must not leak through when both fail.
-  unused_fallback.primary_value = 99999;
-
-  const market::TaiwanFetchOutcome outcome = market::select_taiwan_source(
-      false, unused_primary, false, unused_fallback);
-
-  EXPECT_TRUE(!outcome.ok);
-  EXPECT_TRUE(!outcome.used_primary);
-  EXPECT_TRUE(!outcome.data.valid);
-  EXPECT_EQ(outcome.data.primary_value, 0);
-}
-
-// --- market_schedule.hpp: pure "when to refresh Taiwan" policy -------------
-
-namespace {
-app_core::RtcDateTime local(uint16_t year, uint8_t month, uint8_t day,
-                            uint8_t hour, uint8_t minute) {
-  app_core::RtcDateTime date{};
-  date.year = year;
-  date.month = month;
-  date.day = day;
-  date.hour = hour;
-  date.minute = minute;
-  return date;
-}
-}  // namespace
-
-HOST_TEST(taiwan_market_hours_is_true_on_a_weekday_inside_the_session) {
-  // 2026-08-17 is a Monday.
-  EXPECT_TRUE(market::taiwan_market_hours(local(2026, 8, 17, 9, 0)));
-  EXPECT_TRUE(market::taiwan_market_hours(local(2026, 8, 17, 11, 30)));
-  EXPECT_TRUE(market::taiwan_market_hours(local(2026, 8, 17, 13, 30)));
-}
-
-HOST_TEST(taiwan_market_hours_is_false_on_a_weekday_outside_the_session) {
-  EXPECT_TRUE(!market::taiwan_market_hours(local(2026, 8, 17, 8, 59)));
-  EXPECT_TRUE(!market::taiwan_market_hours(local(2026, 8, 17, 13, 31)));
-  EXPECT_TRUE(!market::taiwan_market_hours(local(2026, 8, 17, 20, 0)));
-  EXPECT_TRUE(!market::taiwan_market_hours(local(2026, 8, 17, 0, 0)));
-}
-
-HOST_TEST(taiwan_market_hours_is_false_on_the_weekend_at_the_same_clock_time) {
-  // 2026-08-15 is a Saturday, 2026-08-16 a Sunday - same 10:00 that reads
-  // as open on the Monday right after them.
-  EXPECT_TRUE(!market::taiwan_market_hours(local(2026, 8, 15, 10, 0)));
-  EXPECT_TRUE(!market::taiwan_market_hours(local(2026, 8, 16, 10, 0)));
-}
-
-HOST_TEST(taiwan_refresh_interval_is_fast_only_during_hours_on_the_primary) {
-  const auto in_hours = local(2026, 8, 17, 10, 0);
-  const auto out_of_hours = local(2026, 8, 17, 20, 0);
-  const auto weekend = local(2026, 8, 15, 10, 0);
-
-  EXPECT_EQ(market::taiwan_refresh_interval_seconds(in_hours, true),
-            market::kTaiwanFastRefreshIntervalSeconds);
-  EXPECT_EQ(market::taiwan_refresh_interval_seconds(out_of_hours, true),
-            market::kRefreshIntervalSeconds);
-  EXPECT_EQ(market::taiwan_refresh_interval_seconds(weekend, true),
-            market::kRefreshIntervalSeconds);
-
-  // The fallback (TWSE) cannot change until after the close - refreshing it
-  // quickly during market hours would just re-fetch an unchanged number, so
-  // it always gets the slow interval regardless of the clock.
-  EXPECT_EQ(market::taiwan_refresh_interval_seconds(in_hours, false),
-            market::kRefreshIntervalSeconds);
-}
-
-HOST_TEST(taiwan_refresh_before_the_open_lands_just_after_it) {
-  // The reported bug: a refresh at 08:55 took the flat 30-minute interval,
-  // so the panel showed yesterday's close from 09:00 until 09:25. The
-  // wake-up is the open plus the same warm-up the US path waits out, for
-  // the same reason - at 09:00 itself the series is one point.
-  EXPECT_EQ(market::taiwan_refresh_interval_seconds(local(2026, 8, 17, 8, 55),
-                                                    true),
-            5 * 60 + market::kOpenWarmupSeconds);
-  EXPECT_EQ(market::taiwan_refresh_interval_seconds(local(2026, 8, 17, 8, 59),
-                                                    true),
-            60 + market::kOpenWarmupSeconds);
-  // Far enough out, and after the close, the flat interval still applies.
-  EXPECT_EQ(market::taiwan_refresh_interval_seconds(local(2026, 8, 17, 3, 0),
-                                                    true),
-            market::kRefreshIntervalSeconds);
-  EXPECT_EQ(market::taiwan_refresh_interval_seconds(local(2026, 8, 17, 14, 0),
-                                                    true),
-            market::kRefreshIntervalSeconds);
-  // Saturday morning has no open to wait for.
-  EXPECT_EQ(market::taiwan_refresh_interval_seconds(local(2026, 8, 15, 8, 55),
-                                                    true),
-            market::kRefreshIntervalSeconds);
 }
 
 // --- market_schedule.hpp: pure "when to refresh US" policy -----------------
@@ -623,8 +434,8 @@ std::string yahoo_response_with_session(long long session_start,
 }  // namespace
 
 HOST_TEST(session_elapsed_fraction_is_partial_mid_session) {
-  // A 270-minute (Taiwan-length) session, 30 5-minute bars in (150 of the
-  // 270 minutes) - just over half.
+  // A 270-minute session, 30 5-minute bars in (150 of the 270 minutes) -
+  // just over half.
   constexpr long long kStart = 1'700'000'000;
   constexpr long long kEnd = kStart + 270 * 60;
   const std::string body =

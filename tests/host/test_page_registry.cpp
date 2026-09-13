@@ -35,28 +35,28 @@ std::vector<PageKey> keys_of(std::initializer_list<PageId> ids) {
 
 HOST_TEST(registry_has_all_five_pages_when_data_is_available) {
   with_builtin_pages();
-  const AppSnapshot snapshot = make_mock_snapshot(DemoScenario::TaiwanSession);
+  const AppSnapshot snapshot = make_mock_snapshot(DemoScenario::UaFxSession);
   PageRegistry registry;
   registry.begin_cycle(snapshot);
 #ifdef APP_CORE_DEMO_MISSING_PAGE
   EXPECT_EQ(registry.page_keys(),
-            keys_of({PageId::Home, PageId::TaiwanMarket, PageId::UsMarket,
+            keys_of({PageId::Home, PageId::UaFx, PageId::UsMarket,
                      PageId::Indoor}));
 #else
   EXPECT_EQ(registry.page_keys(),
-            keys_of({PageId::Home, PageId::TaiwanMarket, PageId::UsMarket,
+            keys_of({PageId::Home, PageId::UaFx, PageId::UsMarket,
                      PageId::Weather, PageId::Indoor}));
 #endif
 }
 
 HOST_TEST(registry_omits_unavailable_pages) {
   with_builtin_pages();
-  AppSnapshot snapshot = make_mock_snapshot(DemoScenario::TaiwanSession);
+  AppSnapshot snapshot = make_mock_snapshot(DemoScenario::UaFxSession);
   snapshot.availability.weather = false;
   PageRegistry registry;
   registry.begin_cycle(snapshot);
   EXPECT_EQ(registry.page_keys(),
-            keys_of({PageId::Home, PageId::TaiwanMarket, PageId::UsMarket,
+            keys_of({PageId::Home, PageId::UaFx, PageId::UsMarket,
                      PageId::Indoor}));
 }
 
@@ -69,11 +69,11 @@ HOST_TEST(registry_orders_pages_by_their_registered_order) {
   // DemoScenario - that reordering only ever fired for the mock fixture.
 #ifdef APP_CORE_DEMO_MISSING_PAGE
   EXPECT_EQ(registry.page_keys(),
-            keys_of({PageId::Home, PageId::TaiwanMarket, PageId::UsMarket,
+            keys_of({PageId::Home, PageId::UaFx, PageId::UsMarket,
                      PageId::Indoor}));
 #else
   EXPECT_EQ(registry.page_keys(),
-            keys_of({PageId::Home, PageId::TaiwanMarket, PageId::UsMarket,
+            keys_of({PageId::Home, PageId::UaFx, PageId::UsMarket,
                      PageId::Weather, PageId::Indoor}));
 #endif
 }
@@ -83,7 +83,7 @@ HOST_TEST(a_registered_page_joins_the_cycle_in_its_own_order_slot) {
   // Order -500 puts it after Home (kOrderHome) and before every data page.
   EXPECT_TRUE(app_core::register_page(
       {{PageId::Settings, 0}, 12, -500, PagePriority::Normal, nullptr, nullptr}));
-  const AppSnapshot snapshot = make_mock_snapshot(DemoScenario::TaiwanSession);
+  const AppSnapshot snapshot = make_mock_snapshot(DemoScenario::UaFxSession);
   PageRegistry registry;
   registry.begin_cycle(snapshot);
   EXPECT_EQ(registry.page_keys()[0], (PageKey{PageId::Home, 0}));
@@ -102,7 +102,7 @@ HOST_TEST(slots_of_one_page_id_are_separate_pages_in_rotation) {
                                          nullptr,
                                          nullptr}));
   }
-  const AppSnapshot snapshot = make_mock_snapshot(DemoScenario::TaiwanSession);
+  const AppSnapshot snapshot = make_mock_snapshot(DemoScenario::UaFxSession);
   PageRegistry registry;
   registry.begin_cycle(snapshot);
   EXPECT_EQ(registry.size(), static_cast<size_t>(3));
@@ -149,7 +149,7 @@ HOST_TEST(priority_is_carried_through_the_cycle_and_moves_nothing_yet) {
                            nullptr, nullptr});
   app_core::register_page({{PageId::Weather, 0}, 12, 1, PagePriority::Urgent,
                            nullptr, nullptr});
-  const AppSnapshot snapshot = make_mock_snapshot(DemoScenario::TaiwanSession);
+  const AppSnapshot snapshot = make_mock_snapshot(DemoScenario::UaFxSession);
   PageRegistry registry;
   registry.begin_cycle(snapshot);
 
@@ -165,7 +165,7 @@ HOST_TEST(priority_is_carried_through_the_cycle_and_moves_nothing_yet) {
 
 HOST_TEST(registry_does_not_rebuild_in_the_middle_of_a_cycle) {
   with_builtin_pages();
-  AppSnapshot snapshot = make_mock_snapshot(DemoScenario::TaiwanSession);
+  AppSnapshot snapshot = make_mock_snapshot(DemoScenario::UaFxSession);
   PageRegistry registry;
   registry.begin_cycle(snapshot);
   const auto started = registry.page_keys();
@@ -181,18 +181,19 @@ HOST_TEST(registry_does_not_rebuild_in_the_middle_of_a_cycle) {
 }
 
 HOST_TEST(mock_fixture_contains_required_deterministic_content) {
-  const AppSnapshot snapshot = make_mock_snapshot(DemoScenario::TaiwanSession);
+  const AppSnapshot snapshot = make_mock_snapshot(DemoScenario::UaFxSession);
 
   EXPECT_EQ(snapshot.clock.hero, std::string("09:41"));
   EXPECT_EQ(snapshot.clock.date, std::string("Sat, 15 Aug 2026"));
   EXPECT_EQ(snapshot.clock.source, std::string("Clock Hero"));
 
-  EXPECT_EQ(snapshot.taiwan_market.primary_label, std::string("TAIEX"));
-  EXPECT_EQ(snapshot.taiwan_market.primary_value, 24'334);
-  EXPECT_EQ(snapshot.taiwan_market.primary_change_percent, 0.52);
-  EXPECT_EQ(snapshot.taiwan_market.secondary_label, std::string("TW50"));
-  EXPECT_EQ(snapshot.taiwan_market.secondary_change_percent, 0.44);
-  EXPECT_EQ(snapshot.taiwan_market.secondary_value, 20'871);
+  EXPECT_EQ(snapshot.ua_fx.primary_label, std::string("USD/UAH"));
+  EXPECT_EQ(snapshot.ua_fx.primary_value, 4'455);
+  EXPECT_EQ(snapshot.ua_fx.primary_change_percent, 0.18);
+  EXPECT_EQ(snapshot.ua_fx.secondary_label, std::string("EUR/UAH"));
+  EXPECT_EQ(snapshot.ua_fx.secondary_change_percent, -0.09);
+  EXPECT_EQ(snapshot.ua_fx.secondary_value, 5'168);
+  EXPECT_TRUE(snapshot.ua_fx.value_has_decimals);
 
   EXPECT_EQ(snapshot.us_market.display_name, std::string("US Market"));
   EXPECT_EQ(snapshot.us_market.primary_label, std::string("S&P 500"));
@@ -236,14 +237,11 @@ HOST_TEST(mock_fixture_contains_required_deterministic_content) {
             (std::array<double, 8>{24.2, 24.3, 24.5, 24.6,
                                    24.7, 24.8, 24.8, 24.8}));
 
-  // The array itself is app_core::kIntradaySampleCount wide; the mock
-  // builder (app_snapshot.cpp) only ever sets these first 8 (has_intraday
-  // stays false for this fixture, so nothing reads the rest) - the
-  // trailing entries default-construct to 0, same as the real field.
-  EXPECT_EQ(snapshot.taiwan_market.intraday_samples,
-            (std::array<int, app_core::kIntradaySampleCount>{
-                24'060, 24'110, 24'095, 24'180, 24'240, 24'220, 24'300,
-                24'334}));
+  // ua_fx has no intraday series (NBU publishes once per day, like the old
+  // TWSE fallback) - the mock builder never sets intraday_samples, so it
+  // default-constructs to all zeros, same as the real field.
+  EXPECT_EQ(snapshot.ua_fx.intraday_samples,
+            (std::array<int, app_core::kIntradaySampleCount>{}));
   EXPECT_EQ(snapshot.us_market.intraday_samples,
             (std::array<int, app_core::kIntradaySampleCount>{
                 5'410, 5'425, 5'420, 5'438, 5'430, 5'440, 5'426, 5'432}));
@@ -277,32 +275,32 @@ HOST_TEST(pcf85063_decode_rejects_invalid_bcd_and_ranges) {
 
 HOST_TEST(auto_rotation_skips_a_weekday_market_page_only_when_data_invalid) {
   with_builtin_pages();
-  AppSnapshot snapshot = make_mock_snapshot(DemoScenario::TaiwanSession);
+  AppSnapshot snapshot = make_mock_snapshot(DemoScenario::UaFxSession);
   snapshot.clock.source = "SNTP";
   snapshot.clock.date = "Wed, 12 Aug 2026";
-  snapshot.taiwan_market.valid = true;
-  EXPECT_TRUE(app_core::page_relevant_for_auto_rotation(PageKey{PageId::TaiwanMarket, 0},
+  snapshot.ua_fx.valid = true;
+  EXPECT_TRUE(app_core::page_relevant_for_auto_rotation(PageKey{PageId::UaFx, 0},
                                                         snapshot));
-  snapshot.taiwan_market.valid = false;
-  EXPECT_TRUE(!app_core::page_relevant_for_auto_rotation(PageKey{PageId::TaiwanMarket, 0},
+  snapshot.ua_fx.valid = false;
+  EXPECT_TRUE(!app_core::page_relevant_for_auto_rotation(PageKey{PageId::UaFx, 0},
                                                          snapshot));
 }
 
 HOST_TEST(auto_rotation_skips_market_pages_on_a_taipei_weekend) {
   with_builtin_pages();
-  AppSnapshot snapshot = make_mock_snapshot(DemoScenario::TaiwanSession);
-  snapshot.taiwan_market.valid = true;
+  AppSnapshot snapshot = make_mock_snapshot(DemoScenario::UaFxSession);
+  snapshot.ua_fx.valid = true;
   snapshot.us_market.valid = true;
   snapshot.clock.source = "SNTP";
 
   snapshot.clock.date = "Sat, 15 Aug 2026";
-  EXPECT_TRUE(!app_core::page_relevant_for_auto_rotation(PageKey{PageId::TaiwanMarket, 0},
+  EXPECT_TRUE(!app_core::page_relevant_for_auto_rotation(PageKey{PageId::UaFx, 0},
                                                          snapshot));
   EXPECT_TRUE(!app_core::page_relevant_for_auto_rotation(PageKey{PageId::UsMarket, 0},
                                                          snapshot));
 
   snapshot.clock.date = "Sun, 16 Aug 2026";
-  EXPECT_TRUE(!app_core::page_relevant_for_auto_rotation(PageKey{PageId::TaiwanMarket, 0},
+  EXPECT_TRUE(!app_core::page_relevant_for_auto_rotation(PageKey{PageId::UaFx, 0},
                                                          snapshot));
 
   // A non-market page is unaffected by the weekend signal.
@@ -313,17 +311,17 @@ HOST_TEST(auto_rotation_skips_market_pages_on_a_taipei_weekend) {
 
 HOST_TEST(auto_rotation_weekend_signal_requires_a_real_synced_clock) {
   with_builtin_pages();
-  AppSnapshot snapshot = make_mock_snapshot(DemoScenario::TaiwanSession);
-  snapshot.taiwan_market.valid = true;
+  AppSnapshot snapshot = make_mock_snapshot(DemoScenario::UaFxSession);
+  snapshot.ua_fx.valid = true;
   snapshot.clock.date = "Sat, 15 Aug 2026";
   snapshot.clock.source = "RTC fallback";
   EXPECT_TRUE(
-      app_core::page_relevant_for_auto_rotation(PageKey{PageId::TaiwanMarket, 0}, snapshot));
+      app_core::page_relevant_for_auto_rotation(PageKey{PageId::UaFx, 0}, snapshot));
 }
 
 HOST_TEST(auto_rotation_invalid_data_is_skipped_on_any_page_kind) {
   with_builtin_pages();
-  AppSnapshot snapshot = make_mock_snapshot(DemoScenario::TaiwanSession);
+  AppSnapshot snapshot = make_mock_snapshot(DemoScenario::UaFxSession);
   snapshot.weather.valid = false;
   snapshot.indoor.valid = false;
   EXPECT_TRUE(
@@ -336,19 +334,19 @@ HOST_TEST(auto_rotation_invalid_data_is_skipped_on_any_page_kind) {
 
 HOST_TEST(next_relevant_auto_index_skips_forward_past_irrelevant_pages) {
   with_builtin_pages();
-  AppSnapshot snapshot = make_mock_snapshot(DemoScenario::TaiwanSession);
+  AppSnapshot snapshot = make_mock_snapshot(DemoScenario::UaFxSession);
   snapshot.clock.source = "SNTP";
   snapshot.clock.date = "Sat, 15 Aug 2026";
-  snapshot.taiwan_market.valid = true;
+  snapshot.ua_fx.valid = true;
   snapshot.us_market.valid = true;
   snapshot.weather.valid = false;
   snapshot.indoor.valid = true;
   const std::vector<PageKey> pages = keys_of({PageId::Home,
-                                              PageId::TaiwanMarket,
+                                              PageId::UaFx,
                                               PageId::UsMarket,
                                               PageId::Weather,
                                               PageId::Indoor});
-  // Landing on TaiwanMarket (closed weekend) should skip to Indoor, past the
+  // Landing on UaFx (closed weekend) should skip to Indoor, past the
   // also-closed UsMarket and the invalid Weather page.
   EXPECT_TRUE(app_core::next_relevant_auto_index(pages, 1, snapshot) ==
               static_cast<std::size_t>(4));
@@ -359,16 +357,16 @@ HOST_TEST(next_relevant_auto_index_skips_forward_past_irrelevant_pages) {
 
 HOST_TEST(next_relevant_auto_index_never_ends_up_with_nothing_to_show) {
   with_builtin_pages();
-  AppSnapshot snapshot = make_mock_snapshot(DemoScenario::TaiwanSession);
+  AppSnapshot snapshot = make_mock_snapshot(DemoScenario::UaFxSession);
   snapshot.clock.source = "SNTP";
   snapshot.clock.date = "Sat, 15 Aug 2026";
-  snapshot.taiwan_market.valid = true;
+  snapshot.ua_fx.valid = true;
   snapshot.us_market.valid = true;
   // Every page in this rotation is either a closed-weekend market or
   // invalid data - nothing qualifies, so the fallback must return the
   // landed-on index unchanged rather than searching forever.
   const std::vector<PageKey> pages =
-      keys_of({PageId::TaiwanMarket, PageId::UsMarket});
+      keys_of({PageId::UaFx, PageId::UsMarket});
   EXPECT_TRUE(app_core::next_relevant_auto_index(pages, 0, snapshot) ==
               static_cast<std::size_t>(0));
   EXPECT_TRUE(app_core::next_relevant_auto_index(pages, 1, snapshot) ==
@@ -377,7 +375,7 @@ HOST_TEST(next_relevant_auto_index_never_ends_up_with_nothing_to_show) {
 
 HOST_TEST(next_relevant_auto_index_empty_pages_is_a_safe_noop) {
   with_builtin_pages();
-  AppSnapshot snapshot = make_mock_snapshot(DemoScenario::TaiwanSession);
+  AppSnapshot snapshot = make_mock_snapshot(DemoScenario::UaFxSession);
   const std::vector<PageKey> pages{};
   EXPECT_TRUE(app_core::next_relevant_auto_index(pages, 0, snapshot) ==
               static_cast<std::size_t>(0));

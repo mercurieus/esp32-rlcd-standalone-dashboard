@@ -55,7 +55,7 @@ HOST_TEST(boot_previous_wraps_to_last_page) {
 }
 
 HOST_TEST(omitted_page_count_wraps_previous_with_four_pages) {
-  AppSnapshot snapshot = make_mock_snapshot(DemoScenario::TaiwanSession);
+  AppSnapshot snapshot = make_mock_snapshot(DemoScenario::UaFxSession);
   snapshot.availability.weather = false;
   PageRegistry registry;
   registry.begin_cycle(snapshot);

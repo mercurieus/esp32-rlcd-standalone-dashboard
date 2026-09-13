@@ -15,9 +15,9 @@ namespace market {
 // One index quote (price + change), independently of which MarketData slot
 // (primary/secondary) it ends up in. Yahoo's chart endpoint answers one
 // symbol per request, so the US fetch layer issues two requests (S&P 500,
-// NASDAQ) and combines two IndexQuote results into one MarketData; TWSE
-// answers with the whole index table in a single call, so
-// parse_taiwan_index() below fills a MarketData directly instead of going
+// NASDAQ) and combines two IndexQuote results into one MarketData; NBU
+// answers with every currency it publishes in a single call, so
+// parse_nbu_rates() below fills a MarketData directly instead of going
 // through this type.
 struct IndexQuote {
   bool valid = false;
@@ -68,26 +68,26 @@ struct IndexQuote {
   long long session_start = 0;
 };
 
-// Parses a TWSE /v1/exchangeReport/MI_INDEX response (a JSON array covering
-// every index TWSE publishes, one row per index) into `out`, matching by
-// name the two rows the Taiwan page needs: "發行量加權股價指數" (TAIEX,
-// primary) and "臺灣50指數" (TW50, secondary). On any malformed or
-// truncated body, or if either row is absent or missing a required field,
-// returns false and resets `out` to a freshly default-constructed
-// MarketData (valid == false). A missing field is never defaulted to zero -
-// the whole parse fails instead.
+// Parses an NBU (bank.gov.ua) /statdirectory/exchange response - a JSON
+// array covering every currency the bank publishes a rate for on the
+// requested date, one row per currency ({"cc":"USD","rate":44.55,...}) -
+// into `out`, matching by "cc" the two rows the page needs: "USD" (primary)
+// and "EUR" (secondary). On any malformed or truncated body, or if either
+// row is absent or missing a required field, returns false and resets `out`
+// to a freshly default-constructed MarketData (valid == false). A missing
+// field is never defaulted to zero - the whole parse fails instead.
 //
-// MI_INDEX is a once-daily closing snapshot ("每日收盤行情-大盤統計資訊"
-// per its own swagger summary), not an intraday feed, so there is no real
-// intraday series to report for it. Rather than leave intraday_samples at
-// its zero default or invent points, it is filled with
-// app_core::kIntradaySampleCount copies of the real TAIEX closing value:
-// ui_data.hpp's normalize_chart_samples() renders any constant array as a
-// flat horizontal line, so the chart on-device visibly reads as "no shape
-// data" without ever displaying a number that was not real. has_intraday
-// stays false, so nothing ever reads intraday_sample_count on this path.
-bool parse_taiwan_index(const char* json, std::size_t length,
-                         app_core::MarketData& out);
+// `rate` (a decimal UAH-per-unit figure) is stored in `out` as hundredths -
+// e.g. 44.55 becomes 4455 - via out.primary_value/secondary_value, with
+// out.value_has_decimals set so the UI renders it back with a decimal
+// point. NBU publishes one rate per day, not an intraday feed, so
+// has_intraday stays false, matching the once-daily TWSE-style branch this
+// mirrors. change_percent and as_of are left at their defaults; the caller
+// (market.cpp's refresh_ua_fx(), which has both today's and yesterday's
+// parsed rows) fills those in, since a single response has no notion of
+// "change" on its own.
+bool parse_nbu_rates(const char* json, std::size_t length,
+                     app_core::MarketData& out);
 
 // Smallest number of real raw points that can be drawn as a series -
 // independent of app_core::kIntradaySampleCount, the chart's own *target*
@@ -160,50 +160,5 @@ void reduce_to_extremes(const double* raw, std::size_t raw_count,
 // effect on whether the quote itself succeeds.
 bool parse_yahoo_quote(const char* json, std::size_t length,
                         const std::string& display_label, IndexQuote& out);
-
-// What refresh_taiwan() (market.hpp) ends up publishing, and whether the
-// primary (Yahoo ^TWII) or the fallback (TWSE MI_INDEX) served it - see
-// select_taiwan_source() below.
-struct TaiwanFetchOutcome {
-  bool ok = false;
-  // True only when the primary actually served this refresh. False both
-  // for a fallback success and for a total failure - callers that need to
-  // tell those two apart already have `ok` for that.
-  bool used_primary = false;
-  app_core::MarketData data;
-};
-
-// Taiwan's fallback selection, as a pure decision with no I/O of its own -
-// market.hpp's refresh_taiwan() does the actual fetching (Yahoo first,
-// TWSE only when Yahoo has already failed - fetching both every cycle
-// would double the request rate for a value normally discarded) and hands
-// the two parse results here.
-//
-// primary_ok/primary is parse_yahoo_quote()'s result for ^TWII. When true,
-// it wins outright: near-real-time data, published as-is, with no
-// secondary index (Yahoo answers one symbol per request, and this source
-// only asked for one - see render_market_sidebar() in
-// components/ui/render_shared.cpp for how an empty secondary_label hides
-// that tile instead of showing a fabricated "0 / +0.00%").
-//
-// fallback_ok/fallback is parse_taiwan_index()'s result for MI_INDEX -
-// meaningful only when primary_ok is false, and already a fully-formed
-// MarketData (TAIEX + TW50, no intraday - MI_INDEX is a once-daily
-// closing snapshot, not a live feed) that this function simply passes
-// through unchanged.
-//
-// Both failing publishes nothing rather than stale or partial data,
-// matching every other provider's rule: a half-real MarketData is not
-// representable (one `valid` flag for the whole struct) and would not be
-// honest anyway.
-//
-// A fallback success still counts as `ok` - the alternative (only the
-// primary counts as a real refresh) would leave a Yahoo outage stuck at
-// the fast retry interval forever, hammering an endpoint that is down for
-// a reason unrelated to how often it is asked.
-TaiwanFetchOutcome select_taiwan_source(bool primary_ok,
-                                        const IndexQuote& primary,
-                                        bool fallback_ok,
-                                        const app_core::MarketData& fallback);
 
 }  // namespace market

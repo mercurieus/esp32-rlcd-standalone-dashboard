@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <new>
 
 namespace ui {
@@ -79,7 +80,7 @@ void render_market(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
   const Rect title_rect{primary.x + 8, primary.y + 4, header_width * 3 / 5, 18};
   const Rect date_rect{title_rect.right(), primary.y + 4,
                        header_width - title_rect.width, 18};
-  label(parent, us_market ? text(Text::TitleUsMarket) : text(Text::TitleTaiwanMarket),
+  label(parent, us_market ? text(Text::TitleUsMarket) : text(Text::TitleUaFx),
         title_rect, small_font());
 
   // The session these figures come from, on every market page and in every
@@ -116,18 +117,30 @@ void render_market(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
           {primary.x + 8, primary.y + 23, primary.width / 2 - 8, 30},
           medium_font());
     char value[24];
-    char change[24];
-    std::snprintf(value, sizeof(value), "%d", market.primary_value);
-    std::snprintf(change, sizeof(change), "%+.2f%%",
-                  market.primary_change_percent);
+    // value_has_decimals: primary_value is hundredths of a unit (e.g. an
+    // exchange rate) rather than a whole-number index point - see its own
+    // comment in app_snapshot.hpp.
+    if (market.value_has_decimals) {
+      std::snprintf(value, sizeof(value), "%d.%02d", market.primary_value / 100,
+                    std::abs(market.primary_value % 100));
+    } else {
+      std::snprintf(value, sizeof(value), "%d", market.primary_value);
+    }
     label(parent, value,
           {primary.x + primary.width / 2, primary.y + 20,
            primary.width / 2 - 8, 32},
           large_font(), LV_TEXT_ALIGN_RIGHT);
-    label(parent, change,
-          {primary.x + primary.width / 2, primary.y + 52,
-           primary.width / 2 - 8, 18},
-          small_font(), LV_TEXT_ALIGN_RIGHT);
+    // has_change: no fabricated "+0.00%" when this refresh has no honest
+    // change figure to report - see its own comment in app_snapshot.hpp.
+    if (market.has_change) {
+      char change[24];
+      std::snprintf(change, sizeof(change), "%+.2f%%",
+                    market.primary_change_percent);
+      label(parent, change,
+            {primary.x + primary.width / 2, primary.y + 52,
+             primary.width / 2 - 8, 18},
+            small_font(), LV_TEXT_ALIGN_RIGHT);
+    }
     divider(parent, {primary.x + 8, primary.y + 66, primary.width - 16,
                      kSeparatorWidth});
 

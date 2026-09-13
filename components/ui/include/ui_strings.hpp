@@ -73,7 +73,7 @@ enum class Text : uint16_t {
   TileRange,
   MarketClose,
   TileStatus,
-  TitleTaiwanMarket,
+  TitleUaFx,
   TitleUsMarket,
   TrayWifi,
   TrayNoWifi,

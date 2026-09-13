@@ -739,7 +739,7 @@ static_assert(
     "disappears");
 
 static_assert(page_shows_tray(app_core::PageId::Home) &&
-                  page_shows_tray(app_core::PageId::TaiwanMarket) &&
+                  page_shows_tray(app_core::PageId::UaFx) &&
                   page_shows_tray(app_core::PageId::UsMarket) &&
                   page_shows_tray(app_core::PageId::Weather) &&
                   page_shows_tray(app_core::PageId::Indoor) &&
@@ -1110,14 +1110,14 @@ constexpr std::array<ChartPoint, N> normalize_chart_samples(
 // primary value, chart, forecast column - is replaced by this single
 // placeholder rather than a zero, an empty percentage, or a chart drawn from
 // an all-zero sample array. One shared string/geometry instead of four
-// copies, one per renderer (Taiwan market, US market, weather, indoor).
+// copies, one per renderer (UA exchange rate, US market, weather, indoor).
 inline constexpr char kNoDataLabel[] = "NO DATA";
 // Appended to a real (not fabricated) reading whose WeatherData::stale flag
 // is set - an old reading is still real data and should be shown, marked,
 // not dropped to the placeholder above.
 inline constexpr char kStaleSuffix[] = " OLD";
 
-// Reserves room for the page's own title row (e.g. "TAIWAN MARKET",
+// Reserves room for the page's own title row (e.g. "UA EXCHANGE RATE",
 // "INDOOR") above the placeholder - generously sized the same way
 // kSetupStatusHeight is above, not an exact font-metric fit, just enough
 // that the placeholder box built below can never land under the title text.
@@ -1141,26 +1141,26 @@ constexpr Rect no_data_rect(const Rect area) {
   return {area.x, top + gap, area.width, kNoDataBoxHeight};
 }
 
-// TaiwanMarket and UsMarket share the same tray-reduced content geometry
+// UaFx and UsMarket share the same tray-reduced content geometry
 // (content_bounds only branches on page_shows_tray, true for both), so one
-// proof against TaiwanMarket covers both market pages.
+// proof against UaFx covers both market pages.
 static_assert(
     rect_within(
-        content_bounds(safe_canvas(), app_core::PageId::TaiwanMarket),
+        content_bounds(safe_canvas(), app_core::PageId::UaFx),
         no_data_rect(market_layout(content_bounds(
                                        safe_canvas(),
-                                       app_core::PageId::TaiwanMarket))
+                                       app_core::PageId::UaFx))
                         .primary)),
     "the market no-data placeholder stays inside the tray-reduced content "
     "bounds");
 static_assert(
     no_data_rect(market_layout(content_bounds(
                                     safe_canvas(),
-                                    app_core::PageId::TaiwanMarket))
+                                    app_core::PageId::UaFx))
                      .primary)
             .y >= market_layout(content_bounds(
                                     safe_canvas(),
-                                    app_core::PageId::TaiwanMarket))
+                                    app_core::PageId::UaFx))
                           .primary.y +
                       kNoDataTitleReserve,
     "the market no-data placeholder never overlaps the reserved title row");
@@ -1199,16 +1199,16 @@ constexpr Rect chart_placeholder_rect(const Rect chart) {
   return {chart.x, chart.y + gap, chart.width, kNoDataBoxHeight};
 }
 
-// TaiwanMarket and UsMarket share the same tray-reduced content geometry, so
-// one proof against TaiwanMarket covers both.
+// UaFx and UsMarket share the same tray-reduced content geometry, so
+// one proof against UaFx covers both.
 static_assert(
     rect_within(
         market_layout(
-            content_bounds(safe_canvas(), app_core::PageId::TaiwanMarket))
+            content_bounds(safe_canvas(), app_core::PageId::UaFx))
             .primary,
         chart_placeholder_rect(market_chart_rect(
             market_layout(content_bounds(safe_canvas(),
-                                         app_core::PageId::TaiwanMarket))
+                                         app_core::PageId::UaFx))
                 .primary,
             kSetupSmallFontLineHeight))),
     "the no-intraday chart placeholder stays inside the market page's "
@@ -1217,12 +1217,12 @@ static_assert(
     rect_within(
         market_chart_rect(
             market_layout(content_bounds(safe_canvas(),
-                                         app_core::PageId::TaiwanMarket))
+                                         app_core::PageId::UaFx))
                 .primary,
             kSetupSmallFontLineHeight),
         chart_placeholder_rect(market_chart_rect(
             market_layout(content_bounds(safe_canvas(),
-                                         app_core::PageId::TaiwanMarket))
+                                         app_core::PageId::UaFx))
                 .primary,
             kSetupSmallFontLineHeight))),
     "the no-intraday chart placeholder stays inside the chart region it "
@@ -1315,7 +1315,7 @@ constexpr HomeTileKind choose_home_tile(const app_core::AppSnapshot& snapshot) {
   if (home_battery_notable(snapshot.battery)) return HomeTileKind::Battery;
   if (snapshot.weather.valid && snapshot.weather.alert) return HomeTileKind::Weather;
   if (snapshot.weather.valid) return HomeTileKind::Weather;
-  if (snapshot.taiwan_market.valid) return HomeTileKind::Market;
+  if (snapshot.ua_fx.valid) return HomeTileKind::Market;
   if (snapshot.indoor.valid) return HomeTileKind::Indoor;
   if (snapshot.battery.valid) return HomeTileKind::Battery;
   return HomeTileKind::None;
@@ -1337,7 +1337,7 @@ constexpr HomeTileKind choose_home_second_tile(
   if (first != HomeTileKind::Indoor && snapshot.indoor.valid) {
     return HomeTileKind::Indoor;
   }
-  if (first != HomeTileKind::Market && snapshot.taiwan_market.valid) {
+  if (first != HomeTileKind::Market && snapshot.ua_fx.valid) {
     return HomeTileKind::Market;
   }
   if (first != HomeTileKind::Battery && snapshot.battery.valid) {

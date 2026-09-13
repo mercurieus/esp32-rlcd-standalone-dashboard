@@ -132,7 +132,7 @@ struct PublishedFields {
   app_core::IndoorData indoor;
   app_core::WeatherData weather;
   app_core::WeatherData new_york_weather;
-  app_core::MarketData taiwan_market;
+  app_core::MarketData ua_fx;
   app_core::MarketData us_market;
   app_core::ClockData clock;
 };
@@ -151,7 +151,7 @@ bool consume_published(PublishedFields& out) {
     out.indoor = g_published_snapshot.indoor;
     out.weather = g_published_snapshot.weather;
     out.new_york_weather = g_published_snapshot.new_york_weather;
-    out.taiwan_market = g_published_snapshot.taiwan_market;
+    out.ua_fx = g_published_snapshot.ua_fx;
     out.us_market = g_published_snapshot.us_market;
     out.clock = g_published_snapshot.clock;
     g_published_dirty = false;
@@ -164,8 +164,8 @@ const char* page_name(app_core::PageId page) {
   switch (page) {
     case app_core::PageId::Home:
       return "Home";
-    case app_core::PageId::TaiwanMarket:
-      return "TaiwanMarket";
+    case app_core::PageId::UaFx:
+      return "UaFx";
     case app_core::PageId::UsMarket:
       return "UsMarket";
     case app_core::PageId::Weather:
@@ -454,7 +454,7 @@ void timer_callback(lv_timer_t* timer) {
     runtime->snapshot.indoor = published.indoor;
     runtime->snapshot.weather = published.weather;
     runtime->snapshot.new_york_weather = published.new_york_weather;
-    runtime->snapshot.taiwan_market = published.taiwan_market;
+    runtime->snapshot.ua_fx = published.ua_fx;
     runtime->snapshot.us_market = published.us_market;
     runtime->snapshot.clock = published.clock;
     // No tray-indicator field here (there used to be one, tray_activity):

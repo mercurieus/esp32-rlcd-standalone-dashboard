@@ -23,8 +23,8 @@ std::vector<PageDescriptor>& registration_table() {
 
 bool g_builtins_registered = false;
 
-bool taiwan_available(const AppSnapshot& snapshot, PageKey) {
-  return snapshot.availability.taiwan_market;
+bool ua_fx_available(const AppSnapshot& snapshot, PageKey) {
+  return snapshot.availability.ua_fx;
 }
 bool us_available(const AppSnapshot& snapshot, PageKey) {
   return snapshot.availability.us_market;
@@ -54,15 +54,16 @@ bool clock_is_weekend(const ClockData& clock) {
   return weekday == "Sat" || weekday == "Sun";
 }
 
-// Two cheap, honest signals for a market page: its own backing data is not
-// valid, or it is a Taipei-local weekend (both the Taiwan and US markets are
-// closed - this covers both without a holiday calendar the market provider
-// deliberately declined to build; a national holiday still shows the previous
-// session's close, which stays honest). The weekend signal only applies once
-// snapshot.clock is a real, SNTP-synced local time - before sync, clock.date
-// is a compile-time guess with no bearing on where the sun actually is.
-bool taiwan_relevant(const AppSnapshot& snapshot, PageKey) {
-  return snapshot.taiwan_market.valid && !clock_is_weekend(snapshot.clock);
+// Two cheap, honest signals for a market/rate page: its own backing data is
+// not valid, or it is a local weekend (both the NBU exchange rate and the US
+// market are closed/unchanged - this covers both without a holiday calendar
+// the provider deliberately declined to build; a national holiday still
+// shows the previous published value, which stays honest). The weekend
+// signal only applies once snapshot.clock is a real, SNTP-synced local time -
+// before sync, clock.date is a compile-time guess with no bearing on where
+// the sun actually is.
+bool ua_fx_relevant(const AppSnapshot& snapshot, PageKey) {
+  return snapshot.ua_fx.valid && !clock_is_weekend(snapshot.clock);
 }
 bool us_relevant(const AppSnapshot& snapshot, PageKey) {
   return snapshot.us_market.valid && !clock_is_weekend(snapshot.clock);
@@ -102,8 +103,8 @@ void register_builtin_pages() {
                  nullptr, nullptr});
   register_page({{PageId::NowPlaying, 0}, 12, 10, PagePriority::Normal,
                  now_playing_available, nullptr});
-  register_page({{PageId::TaiwanMarket, 0}, 12, 20, PagePriority::Normal,
-                 taiwan_available, taiwan_relevant});
+  register_page({{PageId::UaFx, 0}, 12, 20, PagePriority::Normal,
+                 ua_fx_available, ua_fx_relevant});
   register_page({{PageId::UsMarket, 0}, 12, 30, PagePriority::Normal,
                  us_available, us_relevant});
   register_page({{PageId::Weather, 0}, 12, 40, PagePriority::Normal,

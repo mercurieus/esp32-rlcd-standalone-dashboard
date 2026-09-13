@@ -49,17 +49,16 @@ uint8_t days_in_month_impl(uint16_t year, uint8_t month) {
   return days[month - 1];
 }
 
-MarketData taiwan_market() {
+MarketData ua_fx_market() {
   MarketData market;
-  market.display_name = "Taiwan Market";
-  market.primary_label = "TAIEX";
-  market.primary_value = 24'334;
-  market.primary_change_percent = 0.52;
-  market.secondary_label = "TW50";
-  market.secondary_value = 20'871;
-  market.secondary_change_percent = 0.44;
-  market.intraday_samples = {24'060, 24'110, 24'095, 24'180,
-                             24'240, 24'220, 24'300, 24'334};
+  market.display_name = "UA Exchange Rate";
+  market.primary_label = "USD/UAH";
+  market.primary_value = 4'455;  // 44.55, hundredths - see value_has_decimals.
+  market.primary_change_percent = 0.18;
+  market.secondary_label = "EUR/UAH";
+  market.secondary_value = 5'168;  // 51.68.
+  market.secondary_change_percent = -0.09;
+  market.value_has_decimals = true;
   return market;
 }
 
@@ -320,7 +319,7 @@ bool battery_overvoltage_danger(int millivolts) {
 AppSnapshot make_mock_snapshot(DemoScenario scenario) {
   AppSnapshot snapshot;
   snapshot.clock = {"09:41", "Sat, 15 Aug 2026", "Clock Hero"};
-  snapshot.taiwan_market = taiwan_market();
+  snapshot.ua_fx = ua_fx_market();
   snapshot.us_market = us_market();
   snapshot.weather = taipei_weather();
   snapshot.new_york_weather = new_york_weather();

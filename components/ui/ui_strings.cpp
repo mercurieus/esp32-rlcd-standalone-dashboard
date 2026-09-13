@@ -71,7 +71,7 @@ constexpr Row kRows[] = {
     {"RANGE", "區間"},
     {"CLOSE", "收盤"},
     {"STATUS", "狀態"},
-    {"TAIWAN MARKET", "台股"},
+    {"UA EXCHANGE RATE", "UA EXCHANGE RATE"},
     {"US MARKET", "美股"},
     {"WIFI", "已連線"},
     {"NO WIFI", "無網路"},

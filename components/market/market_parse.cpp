@@ -3,7 +3,6 @@
 #include "cJSON.h"
 
 #include <cmath>
-#include <cstdlib>
 
 namespace market {
 namespace {
@@ -34,28 +33,12 @@ void civil_from_unix(long long seconds, uint16_t& year, uint8_t& month,
 
 namespace {
 
-// Field values TWSE publishes for MI_INDEX are all JSON strings (confirmed
-// against the endpoint's own swagger schema, e.g. "收盤指數": {"type":
-// "string"}), not numbers - this extracts one and fails closed on anything
-// else (missing key, null, non-string, empty).
+// Extracts a JSON string field, failing closed on anything else (missing
+// key, null, non-string, empty).
 bool string_field(const cJSON* object, const char* key, std::string& out) {
   const cJSON* item = cJSON_GetObjectItemCaseSensitive(object, key);
   if (!cJSON_IsString(item) || item->valuestring == nullptr) return false;
   out = item->valuestring;
-  return true;
-}
-
-// Parses a TWSE numeric-string field (e.g. "45811.01", "-0.46") with
-// strtod, rejecting anything that doesn't fully consume as a number -
-// leftover garbage after the number, or an empty string, both fail rather
-// than silently truncating.
-bool numeric_string_field(const cJSON* object, const char* key, double& out) {
-  std::string text;
-  if (!string_field(object, key, text) || text.empty()) return false;
-  char* end = nullptr;
-  const double value = std::strtod(text.c_str(), &end);
-  if (end != text.c_str() + text.size()) return false;
-  out = value;
   return true;
 }
 
@@ -100,8 +83,8 @@ void reduce_to_extremes(const double* raw, std::size_t raw_count,
   }
 }
 
-bool parse_taiwan_index(const char* json, std::size_t length,
-                         app_core::MarketData& out) {
+bool parse_nbu_rates(const char* json, std::size_t length,
+                     app_core::MarketData& out) {
   out = app_core::MarketData{};
 
   cJSON* root = cJSON_ParseWithLength(json, length);
@@ -111,9 +94,8 @@ bool parse_taiwan_index(const char* json, std::size_t length,
   do {
     if (!cJSON_IsArray(root)) break;  // unexpected shape: not a row list.
 
-    double taiex_value = 0.0, taiex_change = 0.0;
-    double tw50_value = 0.0, tw50_change = 0.0;
-    bool have_taiex = false, have_tw50 = false;
+    double usd_rate = 0.0, eur_rate = 0.0;
+    bool have_usd = false, have_eur = false;
     uint16_t as_of_year = 0;
     uint8_t as_of_month = 0;
     uint8_t as_of_day = 0;
@@ -121,49 +103,58 @@ bool parse_taiwan_index(const char* json, std::size_t length,
     const cJSON* row = nullptr;
     cJSON_ArrayForEach(row, root) {
       if (!cJSON_IsObject(row)) continue;
-      std::string name;
-      if (!string_field(row, "指數", name)) continue;
-      // "1150814" is ROC year 115, month 08, day 14 - the Republic-of-China
-      // calendar TWSE publishes in, 1911 years behind the Gregorian one.
-      std::string roc_date;
-      if (as_of_year == 0 && string_field(row, "日期", roc_date) &&
-          roc_date.size() == 7) {
-        const int roc = (roc_date[0] - '0') * 100 + (roc_date[1] - '0') * 10 +
-                        (roc_date[2] - '0');
-        const int month = (roc_date[3] - '0') * 10 + (roc_date[4] - '0');
-        const int day = (roc_date[5] - '0') * 10 + (roc_date[6] - '0');
-        if (roc > 0 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-          as_of_year = static_cast<uint16_t>(roc + 1911);
+      std::string code;
+      if (!string_field(row, "cc", code)) continue;
+      const cJSON* rate_item = cJSON_GetObjectItemCaseSensitive(row, "rate");
+      if (!cJSON_IsNumber(rate_item)) continue;
+
+      // "13.09.2026" - DD.MM.YYYY, the same field on every row for a given
+      // request, so the first row that has it names the whole response's
+      // date.
+      std::string date_text;
+      if (as_of_year == 0 && string_field(row, "exchangedate", date_text) &&
+          date_text.size() == 10 && date_text[2] == '.' &&
+          date_text[5] == '.') {
+        const int day = (date_text[0] - '0') * 10 + (date_text[1] - '0');
+        const int month = (date_text[3] - '0') * 10 + (date_text[4] - '0');
+        const int year = (date_text[6] - '0') * 1000 +
+                         (date_text[7] - '0') * 100 +
+                         (date_text[8] - '0') * 10 + (date_text[9] - '0');
+        if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+          as_of_year = static_cast<uint16_t>(year);
           as_of_month = static_cast<uint8_t>(month);
           as_of_day = static_cast<uint8_t>(day);
         }
       }
-      if (name == "發行量加權股價指數" && !have_taiex) {
-        have_taiex = numeric_string_field(row, "收盤指數", taiex_value) &&
-                     numeric_string_field(row, "漲跌百分比", taiex_change);
-      } else if (name == "臺灣50指數" && !have_tw50) {
-        have_tw50 = numeric_string_field(row, "收盤指數", tw50_value) &&
-                    numeric_string_field(row, "漲跌百分比", tw50_change);
+
+      if (code == "USD" && !have_usd) {
+        usd_rate = rate_item->valuedouble;
+        have_usd = true;
+      } else if (code == "EUR" && !have_eur) {
+        eur_rate = rate_item->valuedouble;
+        have_eur = true;
       }
     }
-    if (!have_taiex || !have_tw50) break;
+    if (!have_usd || !have_eur) break;
 
     app_core::MarketData parsed;
-    parsed.display_name = "TAIWAN MARKET";
-    parsed.primary_label = "TAIEX";
-    parsed.primary_value = static_cast<int>(std::lround(taiex_value));
-    parsed.primary_change_percent = taiex_change;
-    parsed.secondary_label = "TW50";
-    parsed.secondary_value = static_cast<int>(std::lround(tw50_value));
-    parsed.secondary_change_percent = tw50_change;
+    parsed.display_name = "UA EXCHANGE RATE";
+    parsed.primary_label = "USD/UAH";
+    // Hundredths, not whole UAH - see value_has_decimals's own comment in
+    // app_snapshot.hpp for why (44.55 -> 4455, rendered back with a decimal
+    // point).
+    parsed.primary_value = static_cast<int>(std::lround(usd_rate * 100.0));
+    parsed.secondary_label = "EUR/UAH";
+    parsed.secondary_value = static_cast<int>(std::lround(eur_rate * 100.0));
+    parsed.value_has_decimals = true;
     parsed.as_of_year = as_of_year;
     parsed.as_of_month = as_of_month;
     parsed.as_of_day = as_of_day;
-    // No intraday feed in this response - see the comment on
-    // parse_taiwan_index() in market_parse.hpp for why a flat repeat of the
-    // real close, not zero or an interpolated series, is used here.
-    parsed.intraday_samples.fill(parsed.primary_value);
     parsed.valid = true;
+    // primary/secondary_change_percent and has_change are left at their
+    // defaults (0.0 / true): a single day's response has no notion of
+    // "change" on its own. market.cpp's refresh_ua_fx() - which calls this
+    // twice, for today and yesterday - fills those in once it has both.
 
     out = parsed;
     ok = true;
@@ -343,42 +334,6 @@ bool parse_yahoo_quote(const char* json, std::size_t length,
 
   cJSON_Delete(root);
   return ok;
-}
-
-TaiwanFetchOutcome select_taiwan_source(bool primary_ok,
-                                        const IndexQuote& primary,
-                                        bool fallback_ok,
-                                        const app_core::MarketData& fallback) {
-  TaiwanFetchOutcome outcome;
-  if (primary_ok) {
-    outcome.ok = true;
-    outcome.used_primary = true;
-    outcome.data.display_name = "TAIWAN MARKET";
-    outcome.data.valid = true;
-    outcome.data.has_intraday = primary.has_intraday;
-    outcome.data.as_of_year = primary.as_of_year;
-    outcome.data.as_of_month = primary.as_of_month;
-    outcome.data.as_of_day = primary.as_of_day;
-    outcome.data.primary_label = primary.label;
-    outcome.data.primary_value = primary.value;
-    outcome.data.primary_change_percent = primary.change_percent;
-    outcome.data.intraday_samples = primary.samples;
-    outcome.data.intraday_sample_count = primary.sample_count;
-    outcome.data.session_elapsed_fraction = primary.session_elapsed_fraction;
-    // secondary_label left empty on purpose: see this function's own
-    // comment in market_parse.hpp.
-    return outcome;
-  }
-  if (fallback_ok) {
-    outcome.ok = true;
-    outcome.used_primary = false;
-    outcome.data = fallback;  // parse_taiwan_index() already built this fully.
-    return outcome;
-  }
-  outcome.ok = false;
-  outcome.used_primary = false;
-  outcome.data = app_core::MarketData{};
-  return outcome;
 }
 
 }  // namespace market
