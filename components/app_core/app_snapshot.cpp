@@ -49,6 +49,35 @@ uint8_t days_in_month_impl(uint16_t year, uint8_t month) {
   return days[month - 1];
 }
 
+// The extremes are the widest text the chart's markers and the header can be
+// asked to draw, not a flattering sample: -10.5 C and 100 %RH. A layout that
+// only fits pleasant numbers should fail here rather than on the panel in
+// January. The gap at index 3 is deliberate too - a slot the sensor did not
+// answer for is the normal case early in a boot, and the chart has to draw a
+// break there rather than bridge it.
+IndoorData indoor() {
+  IndoorData data;
+  data.temperature_c = 24.8;
+  data.humidity_percent = 57;
+  constexpr double kTemperatures[kIndoorHistoryPoints] = {
+      -10.5, 24.1, 24.2, 0.0,  24.4, 24.5, 24.6, 24.7,
+      24.9,  25.0, 24.9, 24.8, 24.7, 24.8, 24.8, 24.8};
+  constexpr uint8_t kHumidity[kIndoorHistoryPoints] = {
+      100, 61, 60, 0, 59, 58, 58, 57, 57, 56, 56, 57, 57, 57, 57, 57};
+  for (std::size_t i = 0; i < kIndoorHistoryPoints; ++i) {
+    const bool present = i != 3;
+    data.history[i].has_temperature = present;
+    data.history[i].has_humidity = present;
+    data.history[i].temperature_c = kTemperatures[i];
+    data.history[i].humidity_percent = kHumidity[i];
+  }
+  data.history_interval_minutes = 30;
+  data.history_time_known = true;
+  data.history_newest_hour = 9;
+  data.history_newest_minute = 41;
+  return data;
+}
+
 MarketData ua_fx_market() {
   MarketData market;
   market.display_name = "UA Exchange Rate";
@@ -327,18 +356,7 @@ AppSnapshot make_mock_snapshot(DemoScenario scenario) {
   // layout fixtures, not readings, and the UI must show a NO DATA placeholder
   // until a real provider fills them in. Nothing on this snapshot may reach
   // the panel as though it were measured.
-  // Humidity's series is the widest text the readings row can be asked to
-  // draw rather than a flattering sample: -10.5 C alongside 100 %RH is the
-  // worst case indoor_history_layout() sizes its columns against, so a
-  // layout that only fits pleasant numbers fails here rather than on the
-  // panel in January.
-  snapshot.indoor = {false,
-                     24.8,
-                     57,
-                     {-10.5, 24.3, 24.5, 24.6, 24.7, 24.8, 24.8, 24.8},
-                     0,
-                     {100, 58, 57, 57, 56, 56, 57, 57},
-                     0};
+  snapshot.indoor = indoor();
   snapshot.availability = {};
 #ifdef APP_CORE_DEMO_MISSING_PAGE
   snapshot.availability.weather = false;

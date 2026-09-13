@@ -1443,86 +1443,134 @@ constexpr TrendKind trend_for_series(const std::array<int, N>& samples,
   return TrendKind::Steady;
 }
 
-// The indoor page's history block - everything below the humidity readout.
-//
-// Only this half of the page is derived here. The title, the hero
-// temperature and the RH figure above it are unchanged and stay as literals
-// in render_indoor.cpp; pulling them in too would be churn in code this
-// change does not otherwise touch.
-//
-// What was here before is worth recording: a comfort band (a DRY/OK/HUMID
-// bar with a tick at the current humidity) occupied y+98..161, and it is
-// what paid for this block. Once humidity is a charted series with its own
-// value and trend icon, the band was a coarser restatement of the RH number
-// printed directly above it, and it was the only 63 px on the page large
-// enough to hold a chart worth reading.
-struct IndoorHistoryLayout {
-  Rect title;   // "HISTORY"
-  Rect legend;  // stroke swatch, measure icon and trend arrow, per series
-  Rect plot;    // both series share this box - see render_indoor.cpp
-  Rect oldest;  // the leftmost point's readings, as text
-  Rect newest;  // the rightmost point's readings, as text
+// Wall-clock hour and minute, for labelling a chart's time axis.
+struct ClockHm {
+  uint8_t hour;
+  uint8_t minute;
 };
 
-// Wide enough for two clusters of (swatch, measure icon, trend arrow) with
-// gaps. Sized here rather than in the renderer so the static_assert below
-// proves the cluster cannot collide with the "HISTORY" label beside it.
-inline constexpr int kIndoorLegendWidth = 140;
+// `minutes_back` before the given time, wrapping over midnight.
+//
+// Only ever produces an HH:MM, so wrapping the day is all that is needed -
+// no date arithmetic, no month lengths, nothing that can be wrong about
+// which day it is. A chart spanning a few hours either side of midnight
+// reads correctly and says nothing at all about dates, which is what it
+// knows.
+constexpr ClockHm time_minus_minutes(uint8_t hour, uint8_t minute,
+                                     int minutes_back) {
+  constexpr int kDay = 24 * 60;
+  int total = static_cast<int>(hour) * 60 + static_cast<int>(minute) -
+              minutes_back;
+  total %= kDay;
+  if (total < 0) total += kDay;
+  return ClockHm{static_cast<uint8_t>(total / 60),
+                 static_cast<uint8_t>(total % 60)};
+}
 
-constexpr IndoorHistoryLayout indoor_history_layout(const Rect bounds) {
-  const int row_height = safe_text_box_height(18, kSetupSmallFontLineHeight);
+// The indoor page, which is now mostly its chart.
+//
+// What this replaced is worth recording. The page used to spend y+25..83 on
+// a hero temperature, y+44 on the humidity beside it and y+98..161 on a
+// comfort band - a DRY/OK/HUMID bar with a tick on it - leaving 35 px for a
+// chart of one measure. The band said nothing the humidity figure above it
+// did not, and the hero's size was not buying enough to justify what it
+// cost the only part of the page that shows change over time. Readings and
+// their trend arrows now share one band at the top and the plot takes 160
+// px, nearly a fifth of the whole panel.
+struct IndoorLayout {
+  Rect title;              // "INDOOR"
+  Rect temperature;        // the current reading, right-aligned
+  Rect temperature_trend;  // its arrow, and the only place one is drawn
+  Rect humidity;
+  Rect humidity_trend;
+  Rect divider;
+  Rect plot;               // both series, and their min/max markers
+  Rect axis_oldest;        // time of the leftmost point
+  Rect axis_newest;        // time of the rightmost point
+  Rect legend;             // stroke swatch and measure icon, per series
+};
+
+// Two clusters of (swatch, measure icon), centred under the plot. No trend
+// arrow here: an arrow belongs beside the reading it describes, at the top.
+inline constexpr int kIndoorLegendWidth = 110;
+inline constexpr int kIndoorTrendIconWidth = 14;
+
+constexpr IndoorLayout indoor_layout(const Rect bounds) {
   const int inset = 8;
   const int full_width = bounds.width - 2 * inset;
-  // Two columns with a gap between them, so the oldest and newest readings
-  // cannot run into each other however wide their text gets. The worst case
-  // is "-10.5C 100%" - eleven characters of montserrat_14, comfortably under
-  // half of the 372 px this leaves each column on a 388 px page. Labels are
-  // LV_LABEL_LONG_DOT, so an unexpectedly wider string ellipsises and gets
-  // logged in a debug build rather than overprinting its neighbour.
-  const int column = full_width / 2 - 4;
-  const int values_y = bounds.y + 209;
-  return IndoorHistoryLayout{
-      {bounds.x + inset, bounds.y + 95, 90, row_height},
-      {bounds.right() - inset - kIndoorLegendWidth, bounds.y + 95,
+  const int header_height = safe_text_box_height(26, kSetupMediumFontLineHeight);
+  const int row_height = safe_text_box_height(18, kSetupSmallFontLineHeight);
+
+  // Laid out right to left from the panel edge, because the readings are
+  // right-aligned against their arrows and the arrows against the edge.
+  // Widths are the worst case with room to spare: "100%" and "-10.5°C" at
+  // montserrat_20 are nowhere near 70 and 110 px, and labels are
+  // LV_LABEL_LONG_DOT, so a wider string ellipsises and is logged in a debug
+  // build rather than overprinting its neighbour.
+  const int humidity_trend_x =
+      bounds.right() - inset - kIndoorTrendIconWidth;
+  const int humidity_x = humidity_trend_x - 4 - 70;
+  const int temperature_trend_x = humidity_x - 6 - kIndoorTrendIconWidth;
+  const int temperature_x = temperature_trend_x - 4 - 110;
+
+  const int plot_y = bounds.y + 44;
+  const int plot_height = 160;
+  const int axis_y = plot_y + plot_height + 3;
+
+  return IndoorLayout{
+      {bounds.x + inset, bounds.y + 8, 80, row_height},
+      {temperature_x, bounds.y + 4, 110, header_height},
+      {temperature_trend_x, bounds.y + 4, kIndoorTrendIconWidth,
+       header_height},
+      {humidity_x, bounds.y + 4, 70, header_height},
+      {humidity_trend_x, bounds.y + 4, kIndoorTrendIconWidth, header_height},
+      {bounds.x + inset, bounds.y + 36, full_width, kSeparatorWidth},
+      {bounds.x + inset, plot_y, full_width, plot_height},
+      {bounds.x + inset, axis_y, 80, row_height},
+      {bounds.right() - inset - 80, axis_y, 80, row_height},
+      {bounds.x + (bounds.width - kIndoorLegendWidth) / 2, axis_y,
        kIndoorLegendWidth, row_height},
-      {bounds.x + inset, bounds.y + 120, full_width, 86},
-      {bounds.x + inset, values_y, column, row_height},
-      {bounds.right() - inset - column, values_y, column, row_height},
   };
 }
 
-// The whole block stays inside the tray-reduced content area, and the legend
-// never reaches back into the title beside it. Proved against the absolute
-// safe_canvas() frame, the same convention every other layout proof here
-// uses.
+// Every proof below is against the absolute safe_canvas() frame, the
+// convention the rest of this file's layout proofs use.
 static_assert(
     rect_within(content_bounds(safe_canvas(), app_core::PageId::Indoor),
-                indoor_history_layout(
+                indoor_layout(
                     content_bounds(safe_canvas(), app_core::PageId::Indoor))
                     .plot),
-    "the indoor history plot stays inside the content bounds");
+    "the indoor plot stays inside the content bounds");
 static_assert(
     rect_within(content_bounds(safe_canvas(), app_core::PageId::Indoor),
-                indoor_history_layout(
+                indoor_layout(
                     content_bounds(safe_canvas(), app_core::PageId::Indoor))
-                    .newest),
-    "the indoor newest-readings label stays inside the content bounds");
+                    .axis_newest),
+    "the indoor time axis stays inside the content bounds");
 static_assert(
-    indoor_history_layout(
-        content_bounds(safe_canvas(), app_core::PageId::Indoor))
+    indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
             .title.right() <
-        indoor_history_layout(
-            content_bounds(safe_canvas(), app_core::PageId::Indoor))
-            .legend.x,
-    "the indoor legend cluster does not overlap the HISTORY label");
+        indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .temperature.x,
+    "the indoor header readings do not overprint the page title");
 static_assert(
-    indoor_history_layout(
-        content_bounds(safe_canvas(), app_core::PageId::Indoor))
-            .oldest.right() <
-        indoor_history_layout(
-            content_bounds(safe_canvas(), app_core::PageId::Indoor))
-            .newest.x,
-    "the indoor oldest and newest readings cannot overprint each other");
+    indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .temperature_trend.right() <=
+        indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .humidity.x,
+    "the temperature trend arrow does not reach into the humidity reading");
+static_assert(
+    indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .axis_oldest.right() <
+        indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .legend.x,
+    "the oldest-time label does not overprint the legend");
+static_assert(
+    indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .legend.right() <
+        indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .axis_newest.x,
+    "the legend does not overprint the newest-time label");
 
 struct HomeLayout {
   Rect hero;

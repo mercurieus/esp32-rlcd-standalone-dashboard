@@ -13,8 +13,9 @@ namespace app_core {
 // Each field carries its own "not recorded" value because the three sources
 // fail independently - the SHTC3 can be absent on a boot where the battery
 // divider reads fine, and a slot half-filled must not average in a zero that
-// nobody measured. This is the same rule the charts already follow with
-// temperature_history_count.
+// nobody measured. history_series() below carries that distinction out to
+// the chart, which draws a break rather than bridging a slot nobody
+// measured.
 struct HistorySample {
   static constexpr uint16_t kNoBattery = 0;
   static constexpr int16_t kNoTemperature = INT16_MIN;
@@ -211,31 +212,33 @@ void history_blob_seal(HistoryBlob& blob, uint32_t seq);
 // line drawn through the wrong day.
 void history_append(HistoryBlob& blob, const HistorySample& sample);
 
-// Fills `out` with the newest temperature readings, oldest-first, and returns
-// how many were written.
-//
-// This is what makes the sensor chart survive a reboot: it draws eight points,
-// the store keeps 576, and the eight it wants are the most recent eight that
-// actually hold a reading. Slots recorded on a boot where the SHTC3 was absent
-// are skipped rather than counted, for the same reason the estimator skips
-// them - a gap must cost resolution, never invent a measurement.
-uint8_t history_recent_temperatures(const HistoryBlob& blob, double* out,
-                                    uint8_t out_count);
+// One slot of the ring, as a chart wants it: the readings plus whether each
+// one is actually there.
+struct HistoryPoint {
+  bool has_temperature = false;
+  bool has_humidity = false;
+  int16_t temperature_decic = 0;
+  uint8_t humidity_percent = 0;
+};
 
-// The same, for humidity, so the sensor page's second series survives a
-// reboot exactly as its first one does.
+// Fills out[0..count-1], oldest-first, with slots sampled `stride` apart,
+// out[count-1] being the newest slot in the ring.
 //
-// Deliberately a separate walk rather than one that fills both at once: the
-// two readings carry their own "not recorded" values and a slot can hold one
-// without the other, so pairing them here would force a slot with a
-// temperature and no humidity to be dropped from both series or counted in
-// both. Each series is as long as its own evidence.
+// Sampled by slot *position*, which is the whole point. The accessor this
+// replaced returned the newest N slots that happened to carry a reading -
+// right for "show me the last few numbers", wrong for anything drawing a
+// time axis, because skipping empty slots silently pulls the remaining
+// points closer together and a chart spaced by index then claims an interval
+// nobody measured. Here a slot with no reading comes back with has_* false
+// and keeps its place, so the caller can leave a gap where a gap belongs.
 //
-// Note the sentinel asymmetry this has to respect: kNoTemperature is
-// INT16_MIN, a reading no sensor can produce, while kNoHumidity is 0xFF,
-// which sits just past a legitimate 0..100 range. A genuine 0 %RH is a
-// measurement and is kept.
-uint8_t history_recent_humidity(const HistoryBlob& blob, uint8_t* out,
-                                uint8_t out_count);
+// Every point's age is therefore known without storing a timestamp per slot:
+// point i was recorded (count - 1 - i) * stride * kHistoryIntervalMinutes
+// before the newest one. Points reaching back past the start of recorded
+// history come back absent rather than clamped to the oldest slot, which
+// would stack several of them on one reading and draw a flat run nobody
+// measured.
+void history_series(const HistoryBlob& blob, HistoryPoint* out, uint8_t count,
+                    uint8_t stride);
 
 }  // namespace app_core
