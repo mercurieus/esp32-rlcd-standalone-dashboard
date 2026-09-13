@@ -505,3 +505,57 @@ HOST_TEST(trend_clamps_a_count_past_the_end_of_the_array) {
   EXPECT_TRUE(ui::trend_for_series(samples, 99, ui::kTemperatureTrend) ==
               ui::TrendKind::SpikeUp);
 }
+
+// --- the sensor chart's time axis ------------------------------------------
+
+HOST_TEST(time_minus_minutes_walks_back_and_wraps_the_day) {
+  const ui::ClockHm same = ui::time_minus_minutes(9, 41, 0);
+  EXPECT_EQ(static_cast<int>(same.hour), 9);
+  EXPECT_EQ(static_cast<int>(same.minute), 41);
+
+  const ui::ClockHm hour_back = ui::time_minus_minutes(9, 41, 60);
+  EXPECT_EQ(static_cast<int>(hour_back.hour), 8);
+  EXPECT_EQ(static_cast<int>(hour_back.minute), 41);
+
+  // The full window: fifteen slots half an hour apart is 7h30 back.
+  const ui::ClockHm window = ui::time_minus_minutes(9, 41, 15 * 30);
+  EXPECT_EQ(static_cast<int>(window.hour), 2);
+  EXPECT_EQ(static_cast<int>(window.minute), 11);
+
+  // Across midnight, which is the case an HH:MM axis has to survive and the
+  // reason this does no date arithmetic at all - there is no day here to be
+  // wrong about.
+  const ui::ClockHm midnight = ui::time_minus_minutes(0, 30, 60);
+  EXPECT_EQ(static_cast<int>(midnight.hour), 23);
+  EXPECT_EQ(static_cast<int>(midnight.minute), 30);
+
+  // More than a day back still lands on a real clock face.
+  const ui::ClockHm far = ui::time_minus_minutes(1, 0, 25 * 60);
+  EXPECT_EQ(static_cast<int>(far.hour), 0);
+  EXPECT_EQ(static_cast<int>(far.minute), 0);
+}
+
+HOST_TEST(minutes_to_next_hour_is_zero_when_already_on_the_hour) {
+  // Zero rather than 60, so a window starting exactly on the hour gets a
+  // rule at its own left edge instead of skipping the first one.
+  EXPECT_EQ(ui::minutes_to_next_hour(0), 0);
+  EXPECT_EQ(ui::minutes_to_next_hour(41), 19);
+  EXPECT_EQ(ui::minutes_to_next_hour(59), 1);
+}
+
+HOST_TEST(indoor_history_origin_is_the_oldest_slot_with_any_reading) {
+  app_core::IndoorData indoor;
+  // Nothing recorded: the origin runs off the end, and the caller draws no
+  // chart rather than spanning a window with nothing in it.
+  EXPECT_EQ(ui::indoor_history_origin(indoor),
+            app_core::kIndoorHistoryPoints);
+
+  // Either measure counts. Humidity alone at slot 3 still anchors the axis
+  // there, because both series share one origin - two origins would be two
+  // different time axes drawn in the same box.
+  indoor.history[3].has_humidity = true;
+  EXPECT_EQ(ui::indoor_history_origin(indoor), static_cast<std::size_t>(3));
+
+  indoor.history[1].has_temperature = true;
+  EXPECT_EQ(ui::indoor_history_origin(indoor), static_cast<std::size_t>(1));
+}
