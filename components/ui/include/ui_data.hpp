@@ -1524,6 +1524,13 @@ struct IndoorLayout {
   Rect axis_newest;          // time of the rightmost point
 };
 
+// The page title's box. 60 px was measured against the wrong string: the
+// English title is "SENSOR", which needs 60 px of glyphs, and label() spends
+// 1 px of inset on each side - so it ellipsised on every render and said so
+// (clipped: "SENSOR" needs 60px, box gives 58px). 64 leaves the widest title
+// its two pixels back with room over; the header groups start ~100 px to the
+// right, so this is free.
+inline constexpr int kIndoorTitleWidth = 64;
 inline constexpr int kIndoorSwatchWidth = 14;
 inline constexpr int kIndoorMeasureIconWidth = 13;
 inline constexpr int kIndoorTrendIconWidth = 14;
@@ -1561,7 +1568,7 @@ constexpr IndoorLayout indoor_layout(const Rect bounds) {
   const int axis_y = plot_y + plot_height + 3;
 
   return IndoorLayout{
-      {bounds.x + inset, bounds.y + 8, 60, row_height},
+      {bounds.x + inset, bounds.y + 8, kIndoorTitleWidth, row_height},
       {temperature_swatch_x, header_y, kIndoorSwatchWidth, header_height},
       {temperature_icon_x, header_y + 3, kIndoorMeasureIconWidth,
        header_height - 6},
