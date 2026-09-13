@@ -165,3 +165,36 @@ CONFIG_MDNS_TASK_CREATE_FROM_SPIRAM=y
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
 CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
+
+# Console on USB Serial/JTAG, because this board has nowhere else to put it.
+#
+# The IDF default is UART0, on GPIO43/44 - pads the ESP32-S3-RLCD-4.2 does not
+# bring out. Every ESP_LOG this firmware emitted went to a pin nobody can
+# reach, and three separate serial captures recorded exactly zero bytes before
+# that was noticed.
+#
+# net_log (above) is not a substitute, and the crash that prompted this is why.
+# It mirrors esp_log output over TCP, so it carries everything the application
+# chooses to log - but a panic handler writes to the console directly, bypassing
+# esp_log entirely, and it runs after the scheduler is already dead, so nothing
+# is going to ship it over Wi-Fi. The StoreProhibited backtrace that found the
+# LVGL heap exhaustion in render_indoor.cpp arrived on this console and could
+# not have arrived on the other one. The same goes for anything that fails
+# before the station has an IP.
+#
+# Secondary console set to none: the primary is the USB peripheral now, and a
+# secondary cannot be the same one.
+#
+# Note this does nothing to an existing sdkconfig - same trap as the rollback
+# setting above. Delete sdkconfig and rebuild, then confirm the value landed in
+# build/config/sdkconfig.h.
+#
+# Caveat worth knowing before relying on it: with CONFIG_PM_ENABLE (above),
+# automatic light sleep suspends this peripheral, and the port disappears with
+# it. CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION holds a NO_LIGHT_SLEEP lock while
+# SOF packets are arriving, which works while a host has the port open and
+# stops working when Windows selective-suspends it - so it is deliberately not
+# set here. In practice: hold the port open to keep a board awake, and use
+# download mode (PWR off, hold BOOT, PWR on) to flash one that has gone quiet.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
