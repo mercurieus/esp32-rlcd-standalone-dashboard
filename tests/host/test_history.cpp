@@ -296,6 +296,64 @@ HOST_TEST(recent_temperatures_returns_the_newest_readings_oldest_first) {
                 app_core::history_recent_temperatures(blob, nullptr, 8)), 0);
 }
 
+HOST_TEST(recent_humidity_returns_the_newest_readings_oldest_first) {
+  app_core::HistoryBlob blob;
+  for (int i = 0; i < 20; ++i) {
+    app_core::HistorySample sample;
+    // Every third slot has no sensor reading, same as the temperature case -
+    // the SHTC3 answers for both measures or for neither.
+    if (i % 3 != 0) {
+      sample.humidity_percent = static_cast<uint8_t>(40 + i);
+    }
+    app_core::history_append(blob, sample);
+  }
+
+  uint8_t out[8] = {};
+  const uint8_t filled = app_core::history_recent_humidity(blob, out, 8);
+  EXPECT_EQ(static_cast<int>(filled), 8);
+  for (int i = 1; i < 8; ++i) {
+    EXPECT_TRUE(out[i] > out[i - 1]);
+  }
+  // The newest slot with a reading is 19 -> 59 %RH.
+  EXPECT_EQ(static_cast<int>(out[7]), 59);
+
+  // Short histories report what they have rather than padding: a padded
+  // chart draws a line through humidity nobody measured.
+  app_core::HistoryBlob sparse;
+  app_core::HistorySample one;
+  one.humidity_percent = 55;
+  app_core::history_append(sparse, one);
+  uint8_t few[8] = {};
+  EXPECT_EQ(static_cast<int>(
+                app_core::history_recent_humidity(sparse, few, 8)), 1);
+
+  EXPECT_EQ(static_cast<int>(
+                app_core::history_recent_humidity(blob, nullptr, 8)), 0);
+}
+
+HOST_TEST(recent_humidity_skips_the_not_recorded_sentinel_not_a_real_zero) {
+  // kNoHumidity is 0xFF, so a genuine 0 %RH reading is a measurement and must
+  // survive - the sentinel is the only value that means "nothing was
+  // recorded". A parallel bug would be easy to write here: temperature's
+  // sentinel is INT16_MIN, an impossible reading, while humidity's sits at
+  // the top of the same range its real values use.
+  app_core::HistoryBlob blob;
+  app_core::HistorySample dry;
+  dry.humidity_percent = 0;
+  app_core::history_append(blob, dry);
+  app_core::HistorySample absent;  // leaves kNoHumidity in place
+  app_core::history_append(blob, absent);
+  app_core::HistorySample damp;
+  damp.humidity_percent = 100;
+  app_core::history_append(blob, damp);
+
+  uint8_t out[8] = {};
+  EXPECT_EQ(static_cast<int>(app_core::history_recent_humidity(blob, out, 8)),
+            2);
+  EXPECT_EQ(static_cast<int>(out[0]), 0);
+  EXPECT_EQ(static_cast<int>(out[1]), 100);
+}
+
 HOST_TEST(pcf85063_encoding_round_trips_and_clears_the_stop_flag) {
   const app_core::RtcDateTime original{2026, 8, 16, 23, 41, 7};
   uint8_t registers[7] = {};

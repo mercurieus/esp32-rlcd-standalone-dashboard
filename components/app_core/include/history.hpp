@@ -222,4 +222,20 @@ void history_append(HistoryBlob& blob, const HistorySample& sample);
 uint8_t history_recent_temperatures(const HistoryBlob& blob, double* out,
                                     uint8_t out_count);
 
+// The same, for humidity, so the sensor page's second series survives a
+// reboot exactly as its first one does.
+//
+// Deliberately a separate walk rather than one that fills both at once: the
+// two readings carry their own "not recorded" values and a slot can hold one
+// without the other, so pairing them here would force a slot with a
+// temperature and no humidity to be dropped from both series or counted in
+// both. Each series is as long as its own evidence.
+//
+// Note the sentinel asymmetry this has to respect: kNoTemperature is
+// INT16_MIN, a reading no sensor can produce, while kNoHumidity is 0xFF,
+// which sits just past a legitimate 0..100 range. A genuine 0 %RH is a
+// measurement and is kept.
+uint8_t history_recent_humidity(const HistoryBlob& blob, uint8_t* out,
+                                uint8_t out_count);
+
 }  // namespace app_core

@@ -238,4 +238,27 @@ uint8_t history_recent_temperatures(const HistoryBlob& blob, double* out,
   return found;
 }
 
+uint8_t history_recent_humidity(const HistoryBlob& blob, uint8_t* out,
+                                uint8_t out_count) {
+  if (out == nullptr || out_count == 0) return 0;
+  // Same backwards walk and reverse as the temperatures above, for the same
+  // reason: the caller wants oldest-first and the count is not known until
+  // the search has finished.
+  uint8_t found = 0;
+  const std::size_t limit =
+      blob.count < kHistorySlots ? blob.count : kHistorySlots;
+  for (std::size_t i = limit; i > 0 && found < out_count; --i) {
+    const HistorySample& sample = blob.samples[i - 1];
+    if (!sample.has_humidity()) continue;
+    out[found] = sample.humidity_percent;
+    ++found;
+  }
+  for (uint8_t i = 0; i < found / 2; ++i) {
+    const uint8_t swap = out[i];
+    out[i] = out[found - 1 - i];
+    out[found - 1 - i] = swap;
+  }
+  return found;
+}
+
 }  // namespace app_core
