@@ -215,50 +215,32 @@ void history_append(HistoryBlob& blob, const HistorySample& sample) {
   blob.samples[kHistorySlots - 1] = sample;
 }
 
-uint8_t history_recent_temperatures(const HistoryBlob& blob, double* out,
-                                    uint8_t out_count) {
-  if (out == nullptr || out_count == 0) return 0;
-  // Walk backwards collecting the newest first, then reverse: the caller wants
-  // oldest-first, and searching forwards would mean finding the start before
-  // knowing how many there are.
-  uint8_t found = 0;
-  const std::size_t limit =
-      blob.count < kHistorySlots ? blob.count : kHistorySlots;
-  for (std::size_t i = limit; i > 0 && found < out_count; --i) {
-    const HistorySample& sample = blob.samples[i - 1];
-    if (!sample.has_temperature()) continue;
-    out[found] = static_cast<double>(sample.temperature_decic) / 10.0;
-    ++found;
-  }
-  for (uint8_t i = 0; i < found / 2; ++i) {
-    const double swap = out[i];
-    out[i] = out[found - 1 - i];
-    out[found - 1 - i] = swap;
-  }
-  return found;
-}
+void history_series(const HistoryBlob& blob, HistoryPoint* out, uint8_t count,
+                    uint8_t stride) {
+  if (out == nullptr || count == 0) return;
+  if (stride == 0) stride = 1;
+  for (uint8_t i = 0; i < count; ++i) out[i] = HistoryPoint{};
 
-uint8_t history_recent_humidity(const HistoryBlob& blob, uint8_t* out,
-                                uint8_t out_count) {
-  if (out == nullptr || out_count == 0) return 0;
-  // Same backwards walk and reverse as the temperatures above, for the same
-  // reason: the caller wants oldest-first and the count is not known until
-  // the search has finished.
-  uint8_t found = 0;
   const std::size_t limit =
       blob.count < kHistorySlots ? blob.count : kHistorySlots;
-  for (std::size_t i = limit; i > 0 && found < out_count; --i) {
-    const HistorySample& sample = blob.samples[i - 1];
-    if (!sample.has_humidity()) continue;
-    out[found] = sample.humidity_percent;
-    ++found;
+  if (limit == 0) return;
+
+  // Walked from the newest slot backwards in stride-sized steps. `back` is
+  // how many slots before the newest this point sits; once that reaches past
+  // the start of recorded history the remaining (older) points stay absent.
+  for (uint8_t i = 0; i < count; ++i) {
+    const std::size_t back = static_cast<std::size_t>(count - 1 - i) * stride;
+    if (back >= limit) continue;
+    const HistorySample& sample = blob.samples[limit - 1 - back];
+    if (sample.has_temperature()) {
+      out[i].has_temperature = true;
+      out[i].temperature_decic = sample.temperature_decic;
+    }
+    if (sample.has_humidity()) {
+      out[i].has_humidity = true;
+      out[i].humidity_percent = sample.humidity_percent;
+    }
   }
-  for (uint8_t i = 0; i < found / 2; ++i) {
-    const uint8_t swap = out[i];
-    out[i] = out[found - 1 - i];
-    out[found - 1 - i] = swap;
-  }
-  return found;
 }
 
 }  // namespace app_core

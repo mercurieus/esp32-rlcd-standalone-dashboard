@@ -161,27 +161,50 @@ struct WeatherData {
   bool alert = false;
 };
 
+// How many points the sensor page charts. Sixteen across a 372 px plot is a
+// point every ~23 px - fine enough to read a shape, coarse enough that each
+// one is a real slot rather than an interpolation.
+inline constexpr std::size_t kIndoorHistoryPoints = 16;
+
+// One charted moment. Both readings and both presence flags travel together
+// in one struct rather than in parallel arrays: a chart whose values and
+// validity can drift out of step with each other is the exact failure this
+// page has already had once.
+struct IndoorHistoryPoint {
+  bool has_temperature = false;
+  bool has_humidity = false;
+  double temperature_c = 0.0;
+  uint8_t humidity_percent = 0;
+};
+
 struct IndoorData {
   bool valid = false;
   double temperature_c = 0.0;
   uint8_t humidity_percent = 0;
-  // Deterministic mock history for this snapshot-only slice.
-  std::array<double, 8> temperature_history_c{};
-  // How many of the history slots hold a real reading, oldest first. Zero
-  // until the first interval elapses. Without it the array's leading zeros are
-  // indistinguishable from measurements of 0 C, and the chart drew a line
-  // through them - a shape made of numbers nobody recorded.
-  uint8_t temperature_history_count = 0;
-  // Humidity's own series, whole percent as the SHTC3 and HistorySample both
-  // carry it. Appended on the same tick as the temperature above, so index i
-  // of each array is the same moment - the chart draws them against one time
-  // axis and nothing reconciles two clocks to make that true.
-  std::array<uint8_t, 8> humidity_history_percent{};
-  // Its own count, not shared with temperature's. A slot can hold one reading
-  // without the other (see history_recent_humidity in history.hpp), so one
-  // series can legitimately be shorter than its neighbour and must not be
-  // padded up to match.
-  uint8_t humidity_history_count = 0;
+  // Oldest-first, evenly spaced history_interval_minutes apart, sampled
+  // straight out of the flash ring by slot position (history_series in
+  // history.hpp). Evenly spaced is the load-bearing property: it is what
+  // lets a point's position on the chart mean a time, and it is why this is
+  // no longer accumulated in RAM by the indoor task, which used to mix
+  // 5-minute points seeded from flash with 30-minute ones added live and
+  // then draw all of them as though they were equally spaced.
+  //
+  // An absent point is a slot that recorded no reading. It keeps its place
+  // here and is drawn as a break in the line, never bridged.
+  std::array<IndoorHistoryPoint, kIndoorHistoryPoints> history{};
+  // Spacing between adjacent points. Zero means the series is not to be
+  // treated as a time axis at all.
+  uint16_t history_interval_minutes = 0;
+  // The wall-clock time of the newest point, from which every other point's
+  // time is that many intervals earlier.
+  //
+  // False whenever the clock is not trustworthy - before SNTP has landed the
+  // device's idea of the time is a compile-time guess, and a chart axis
+  // labelled from it would be inventing the one thing it exists to report.
+  // The page draws no times at all in that case.
+  bool history_time_known = false;
+  uint8_t history_newest_hour = 0;
+  uint8_t history_newest_minute = 0;
 };
 
 struct Availability {

@@ -263,95 +263,24 @@ HOST_TEST(history_append_keeps_the_newest_window_oldest_first) {
       4200);
 }
 
-HOST_TEST(recent_temperatures_returns_the_newest_readings_oldest_first) {
-  app_core::HistoryBlob blob;
-  for (int i = 0; i < 20; ++i) {
-    app_core::HistorySample sample;
-    // Every third slot has no sensor reading - a boot with the SHTC3 absent.
-    if (i % 3 != 0) {
-      sample.temperature_decic = static_cast<int16_t>(200 + i);
-    }
-    app_core::history_append(blob, sample);
-  }
-
-  double out[8] = {};
-  const uint8_t filled = app_core::history_recent_temperatures(blob, out, 8);
-  EXPECT_EQ(static_cast<int>(filled), 8);
-  // Oldest-first, and strictly increasing because the source ramp was.
-  for (int i = 1; i < 8; ++i) EXPECT_TRUE(out[i] > out[i - 1]);
-  // The newest slot with a reading is 19 -> 21.9 C.
-  EXPECT_TRUE(out[7] > 21.8 && out[7] < 22.0);
-
-  // Fewer readings than asked for is reported, not padded with zeros - a
-  // padded chart draws a line through temperatures nobody measured.
-  app_core::HistoryBlob sparse;
-  app_core::HistorySample one;
-  one.temperature_decic = 250;
-  app_core::history_append(sparse, one);
-  double few[8] = {};
-  EXPECT_EQ(static_cast<int>(
-                app_core::history_recent_temperatures(sparse, few, 8)), 1);
-
-  EXPECT_EQ(static_cast<int>(
-                app_core::history_recent_temperatures(blob, nullptr, 8)), 0);
-}
-
-HOST_TEST(recent_humidity_returns_the_newest_readings_oldest_first) {
-  app_core::HistoryBlob blob;
-  for (int i = 0; i < 20; ++i) {
-    app_core::HistorySample sample;
-    // Every third slot has no sensor reading, same as the temperature case -
-    // the SHTC3 answers for both measures or for neither.
-    if (i % 3 != 0) {
-      sample.humidity_percent = static_cast<uint8_t>(40 + i);
-    }
-    app_core::history_append(blob, sample);
-  }
-
-  uint8_t out[8] = {};
-  const uint8_t filled = app_core::history_recent_humidity(blob, out, 8);
-  EXPECT_EQ(static_cast<int>(filled), 8);
-  for (int i = 1; i < 8; ++i) {
-    EXPECT_TRUE(out[i] > out[i - 1]);
-  }
-  // The newest slot with a reading is 19 -> 59 %RH.
-  EXPECT_EQ(static_cast<int>(out[7]), 59);
-
-  // Short histories report what they have rather than padding: a padded
-  // chart draws a line through humidity nobody measured.
-  app_core::HistoryBlob sparse;
-  app_core::HistorySample one;
-  one.humidity_percent = 55;
-  app_core::history_append(sparse, one);
-  uint8_t few[8] = {};
-  EXPECT_EQ(static_cast<int>(
-                app_core::history_recent_humidity(sparse, few, 8)), 1);
-
-  EXPECT_EQ(static_cast<int>(
-                app_core::history_recent_humidity(blob, nullptr, 8)), 0);
-}
-
-HOST_TEST(recent_humidity_skips_the_not_recorded_sentinel_not_a_real_zero) {
+HOST_TEST(history_series_keeps_a_real_zero_humidity_and_drops_the_sentinel) {
   // kNoHumidity is 0xFF, so a genuine 0 %RH reading is a measurement and must
-  // survive - the sentinel is the only value that means "nothing was
-  // recorded". A parallel bug would be easy to write here: temperature's
-  // sentinel is INT16_MIN, an impossible reading, while humidity's sits at
-  // the top of the same range its real values use.
+  // survive - the sentinel is the only value meaning "nothing was recorded".
+  // Easy to get wrong: temperature's sentinel is INT16_MIN, an impossible
+  // reading, while humidity's sits just past the top of the range its real
+  // values use.
   app_core::HistoryBlob blob;
   app_core::HistorySample dry;
   dry.humidity_percent = 0;
   app_core::history_append(blob, dry);
   app_core::HistorySample absent;  // leaves kNoHumidity in place
   app_core::history_append(blob, absent);
-  app_core::HistorySample damp;
-  damp.humidity_percent = 100;
-  app_core::history_append(blob, damp);
 
-  uint8_t out[8] = {};
-  EXPECT_EQ(static_cast<int>(app_core::history_recent_humidity(blob, out, 8)),
-            2);
-  EXPECT_EQ(static_cast<int>(out[0]), 0);
-  EXPECT_EQ(static_cast<int>(out[1]), 100);
+  app_core::HistoryPoint points[2] = {};
+  app_core::history_series(blob, points, 2, 1);
+  EXPECT_TRUE(points[0].has_humidity);
+  EXPECT_EQ(static_cast<int>(points[0].humidity_percent), 0);
+  EXPECT_TRUE(!points[1].has_humidity);
 }
 
 HOST_TEST(pcf85063_encoding_round_trips_and_clears_the_stop_flag) {
@@ -384,4 +313,95 @@ HOST_TEST(pcf85063_encoding_round_trips_and_clears_the_stop_flag) {
   EXPECT_TRUE(!app_core::encode_pcf85063(bad_year, registers,
                                          sizeof(registers)));
   EXPECT_TRUE(!app_core::encode_pcf85063(original, registers, 3));
+}
+
+// --- history_series: the positional walk a time axis needs ----------------
+
+HOST_TEST(history_series_samples_by_slot_position_at_the_stride) {
+  app_core::HistoryBlob blob;
+  for (int i = 0; i < 20; ++i) {
+    app_core::HistorySample sample;
+    sample.temperature_decic = static_cast<int16_t>(200 + i);
+    sample.humidity_percent = static_cast<uint8_t>(40 + i);
+    app_core::history_append(blob, sample);
+  }
+
+  app_core::HistoryPoint points[4] = {};
+  app_core::history_series(blob, points, 4, 3);
+
+  // Newest slot is 19; stepping back 3 at a time gives 10, 13, 16, 19 -
+  // oldest-first.
+  EXPECT_EQ(static_cast<int>(points[0].temperature_decic), 210);
+  EXPECT_EQ(static_cast<int>(points[1].temperature_decic), 213);
+  EXPECT_EQ(static_cast<int>(points[2].temperature_decic), 216);
+  EXPECT_EQ(static_cast<int>(points[3].temperature_decic), 219);
+  for (const auto& point : points) {
+    EXPECT_TRUE(point.has_temperature);
+    EXPECT_TRUE(point.has_humidity);
+  }
+  EXPECT_EQ(static_cast<int>(points[3].humidity_percent), 59);
+}
+
+HOST_TEST(history_series_leaves_a_gap_where_a_slot_has_no_reading) {
+  // This is the whole reason the positional walk exists.
+  // The accessor this replaced walked the newest N slots that carried a
+  // reading, which skips an empty slot and pulls its neighbours together -
+  // on a chart spaced by index that claims an interval nobody measured.
+  // Here the hole keeps its place.
+  app_core::HistoryBlob blob;
+  for (int i = 0; i < 4; ++i) {
+    app_core::HistorySample sample;
+    // Slot 2 is a boot with the sensor unreadable; it still records, because
+    // the gap is information.
+    if (i != 2) {
+      sample.temperature_decic = static_cast<int16_t>(200 + i);
+      sample.humidity_percent = static_cast<uint8_t>(50 + i);
+    }
+    app_core::history_append(blob, sample);
+  }
+
+  app_core::HistoryPoint points[4] = {};
+  app_core::history_series(blob, points, 4, 1);
+
+  EXPECT_TRUE(points[0].has_temperature);
+  EXPECT_TRUE(points[1].has_temperature);
+  EXPECT_TRUE(!points[2].has_temperature);
+  EXPECT_TRUE(!points[2].has_humidity);
+  EXPECT_TRUE(points[3].has_temperature);
+  EXPECT_EQ(static_cast<int>(points[3].temperature_decic), 203);
+}
+
+HOST_TEST(history_series_reaching_past_recorded_history_stays_absent) {
+  // A board an hour into its first boot cannot answer for eight hours ago.
+  // Those points come back absent rather than clamped to the oldest slot,
+  // which would stack several points on one reading and draw a flat run that
+  // was never measured.
+  app_core::HistoryBlob blob;
+  for (int i = 0; i < 2; ++i) {
+    app_core::HistorySample sample;
+    sample.temperature_decic = static_cast<int16_t>(230 + i);
+    app_core::history_append(blob, sample);
+  }
+
+  app_core::HistoryPoint points[5] = {};
+  app_core::history_series(blob, points, 5, 1);
+
+  for (int i = 0; i < 3; ++i) EXPECT_TRUE(!points[i].has_temperature);
+  EXPECT_TRUE(points[3].has_temperature);
+  EXPECT_EQ(static_cast<int>(points[3].temperature_decic), 230);
+  EXPECT_EQ(static_cast<int>(points[4].temperature_decic), 231);
+}
+
+HOST_TEST(history_series_on_an_empty_ring_reports_nothing_at_all) {
+  app_core::HistoryBlob blob;
+  app_core::HistoryPoint points[3] = {};
+  app_core::history_series(blob, points, 3, 6);
+  for (const auto& point : points) {
+    EXPECT_TRUE(!point.has_temperature);
+    EXPECT_TRUE(!point.has_humidity);
+  }
+  // A zero stride would walk the same slot forever; it is clamped to 1.
+  app_core::history_series(blob, points, 3, 0);
+  EXPECT_TRUE(!points[0].has_temperature);
+  app_core::history_series(blob, nullptr, 3, 6);  // must not crash
 }

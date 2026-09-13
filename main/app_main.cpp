@@ -973,35 +973,21 @@ constexpr uint32_t kIndoorSamplePeriodMs = 60'000;
 // even on failure, with a freshly default-constructed IndoorData (valid
 // stays false): a read/CRC failure must flip the page to NO DATA, not leave
 // whatever the last valid reading was sitting on screen as though current.
-// One history point per half hour, so the eight slots span four hours - long
-// enough for a room's trend to be a shape rather than noise, short enough that
-// the display says something on the day it is switched on. The reading itself
-// is still sampled every minute; this only decides how often one is kept.
+// One charted point every six slots of the ring, so kIndoorHistoryPoints of
+// them span eight hours - long enough for a room's shape to be a shape
+// rather than noise. The reading is still sampled every minute and the ring
+// still records every five; this only decides how far apart the points the
+// page draws are.
 //
-// In RAM, so it starts empty after a reboot. The chart draws only the points
-// that exist rather than padding with zeros, which is why the count travels
-// with the array.
-constexpr uint32_t kIndoorHistoryIntervalMs = 30 * 60'000;
+// There is no RAM history here any more, and that is the point. The task
+// used to keep its own eight-point array, seeded from flash with the newest
+// eight slots that carried a reading (5 minutes apart) and then extended
+// live every 30 minutes - two different spacings in one array that the chart
+// then drew as though they were one. The ring is the only history now, read
+// fresh each cycle, so a point's position is a time.
+constexpr uint8_t kIndoorHistoryStride = 6;
 
 [[noreturn]] void indoor_monitor_task(void*) {
-  std::array<double, 8> history{};
-  // Seeded from flash rather than starting empty: the chart used to lose
-  // everything on every reboot, which on a board that reboots for each
-  // firmware push meant it was almost never populated.
-  uint8_t history_count = app_core::history_recent_temperatures(
-      history_store::current(), history.data(),
-      static_cast<uint8_t>(history.size()));
-  std::array<uint8_t, 8> humidity_history{};
-  uint8_t humidity_history_count = app_core::history_recent_humidity(
-      history_store::current(), humidity_history.data(),
-      static_cast<uint8_t>(humidity_history.size()));
-  if (history_count > 0 || humidity_history_count > 0) {
-    ESP_LOGI(kTag,
-             "indoor history: seeded %u temperature and %u humidity point(s) "
-             "from flash",
-             history_count, humidity_history_count);
-  }
-  uint32_t since_history_ms = kIndoorHistoryIntervalMs;  // record immediately
   for (;;) {
     app_core::IndoorData indoor;
     float temperature_c = 0.0f;
@@ -1017,44 +1003,34 @@ constexpr uint32_t kIndoorHistoryIntervalMs = 30 * 60'000;
     } else {
       ESP_LOGW(kTag, "SHTC3 read failed");
     }
-    // Only a good reading advances the history; a failed read must not push a
-    // gap into the series and it must not silently age the interval either.
-    if (indoor.valid) {
-      since_history_ms += kIndoorSamplePeriodMs;
-      if (since_history_ms >= kIndoorHistoryIntervalMs) {
-        since_history_ms = 0;
-        if (history_count < history.size()) {
-          history[history_count++] = indoor.temperature_c;
-        } else {
-          for (std::size_t i = 1; i < history.size(); ++i) {
-            history[i - 1] = history[i];
-          }
-          history[history.size() - 1] = indoor.temperature_c;
-        }
-        // Appended in the same branch, on the same tick, from the same
-        // reading: that is what makes index i of the two arrays the same
-        // moment, which the chart relies on to draw them against one time
-        // axis. Anything that appends one without the other silently shears
-        // the two series apart.
-        if (humidity_history_count < humidity_history.size()) {
-          humidity_history[humidity_history_count++] = indoor.humidity_percent;
-        } else {
-          for (std::size_t i = 1; i < humidity_history.size(); ++i) {
-            humidity_history[i - 1] = humidity_history[i];
-          }
-          humidity_history[humidity_history.size() - 1] =
-              indoor.humidity_percent;
-        }
-        ESP_LOGI(kTag,
-                 "indoor history: %u/%u points, newest %.1f C / %u%%",
-                 history_count, static_cast<unsigned>(history.size()),
-                 indoor.temperature_c, indoor.humidity_percent);
-      }
+    // Read fresh from the ring every cycle rather than accumulated here. The
+    // recorder task owns what goes in; this only decides which slots the
+    // page draws.
+    app_core::HistoryPoint points[app_core::kIndoorHistoryPoints] = {};
+    app_core::history_series(history_store::current(), points,
+                             static_cast<uint8_t>(app_core::kIndoorHistoryPoints),
+                             kIndoorHistoryStride);
+    for (std::size_t i = 0; i < app_core::kIndoorHistoryPoints; ++i) {
+      indoor.history[i].has_temperature = points[i].has_temperature;
+      indoor.history[i].temperature_c =
+          static_cast<double>(points[i].temperature_decic) / 10.0;
+      indoor.history[i].has_humidity = points[i].has_humidity;
+      indoor.history[i].humidity_percent = points[i].humidity_percent;
     }
-    indoor.temperature_history_c = history;
-    indoor.temperature_history_count = history_count;
-    indoor.humidity_history_percent = humidity_history;
-    indoor.humidity_history_count = humidity_history_count;
+    indoor.history_interval_minutes = static_cast<uint16_t>(
+        kIndoorHistoryStride * app_core::kHistoryIntervalMinutes);
+
+    // The newest point is the newest slot, recorded at most one recording
+    // interval ago, so the current time names it closely enough for an HH:MM
+    // axis label. Only with a synced clock: before that the device's time is
+    // a compile-time guess, and an axis labelled from it would invent the one
+    // thing it is there to report.
+    app_core::RtcDateTime local_time{};
+    if (net_time::synced() && net_time::now(local_time)) {
+      indoor.history_time_known = true;
+      indoor.history_newest_hour = local_time.hour;
+      indoor.history_newest_minute = local_time.minute;
+    }
 
     wifi_provision::set_indoor(indoor);
     vTaskDelay(pdMS_TO_TICKS(kIndoorSamplePeriodMs));
