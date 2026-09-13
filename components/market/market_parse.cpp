@@ -139,12 +139,17 @@ bool parse_nbu_rates(const char* json, std::size_t length,
 
     app_core::MarketData parsed;
     parsed.display_name = "UA EXCHANGE RATE";
-    parsed.primary_label = "USD/UAH";
+    // Currency alone, not "USD/UAH". The denominator is already on the page:
+    // display_name reads "UA EXCHANGE RATE" above both figures, so carrying
+    // "/UAH" twice more spent 40 px per caption restating it - and the
+    // sidebar tile's caption box could not afford it, which the panel
+    // reported as: clipped: "EUR/UAH" needs 98px, box gives 94px.
+    parsed.primary_label = "USD";
     // Hundredths, not whole UAH - see value_has_decimals's own comment in
     // app_snapshot.hpp for why (44.55 -> 4455, rendered back with a decimal
     // point).
     parsed.primary_value = static_cast<int>(std::lround(usd_rate * 100.0));
-    parsed.secondary_label = "EUR/UAH";
+    parsed.secondary_label = "EUR";
     parsed.secondary_value = static_cast<int>(std::lround(eur_rate * 100.0));
     parsed.value_has_decimals = true;
     parsed.as_of_year = as_of_year;
