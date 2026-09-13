@@ -15,8 +15,9 @@ esp_err_t start();
 // True once a sync has actually landed, not merely been requested.
 bool synced();
 
-// Fills out in Taiwan local time from the current system clock. Returns
-// false, leaving out untouched, until synced() is true.
+// Fills out in the device's displayed local time (kTimeZone) from the
+// current system clock. Returns false, leaving out untouched, until synced()
+// is true.
 bool now(app_core::RtcDateTime& out);
 
 }  // namespace net_time
