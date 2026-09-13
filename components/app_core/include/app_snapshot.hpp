@@ -15,8 +15,8 @@ namespace app_core {
 // shown because its own state says so, not because rotation reached it.
 // AssistantCard is the one entry here with several pages behind it: the
 // remote cards share this id and are told apart by PageKey::slot.
-enum class PageId { Home, TaiwanMarket, UsMarket, Weather, Indoor, Setup, Settings, Ota, NowPlaying, AssistantCard };
-enum class DemoScenario { MorningAlert, TaiwanSession, NightSession };
+enum class PageId { Home, UaFx, UsMarket, Weather, Indoor, Setup, Settings, Ota, NowPlaying, AssistantCard };
+enum class DemoScenario { MorningAlert, UaFxSession, NightSession };
 
 struct ClockData {
   std::string hero;
@@ -62,9 +62,8 @@ bool decode_pcf85063(const uint8_t* registers, std::size_t length,
 // IndexQuote::samples - one target resolution for both, not two constants
 // that could drift apart. ~4 px/point against this project's actual market
 // chart width (roughly 260 px) - see modules/market's own notes on the
-// tradeoff. Large enough that Taiwan's full 09:00-13:30 session at 5-minute
-// bars (54 of them) fits with no reduction at all; the US session at the
-// same granularity (78 bars over 6.5 hours) still needs a mild one.
+// tradeoff. Large enough that the US session at 5-minute bars (78 of them
+// over 6.5 hours) still needs only a mild reduction.
 inline constexpr std::size_t kIntradaySampleCount = 64;
 
 struct MarketData {
@@ -115,16 +114,26 @@ struct MarketData {
   // last timestamp in the response's own series - both epoch seconds, no
   // device clock, no timezone, no DST arithmetic, and (verified live
   // against the real endpoint before this was built) present in an
-  // ordinary chart response. This is why Taiwan and US both get a genuine
-  // value from the same mechanism, unlike an earlier version of this field
-  // that derived Taiwan's alone from market_schedule.hpp's hardcoded
-  // 09:00-13:30 constants and the board's own RTC - superseded, not kept
-  // alongside this.
+  // ordinary chart response.
   //
   // Default 1.0 ("complete") on purpose: a source with no notion of this
   // (the TWSE fallback, which only ever carries a completed close) must
   // render exactly as it always has, at full width.
   float session_elapsed_fraction = 1.0f;
+  // True when primary_value/secondary_value are stored in hundredths of a
+  // unit rather than whole units - e.g. an exchange rate of 44.55 stored as
+  // 4455 - and must render with two decimal places instead of the bare
+  // integer every other market source uses. False (the default) keeps the
+  // existing index-point formatting for sources like the US page.
+  bool value_has_decimals = false;
+  // False means primary/secondary_change_percent must not be shown: this
+  // source has no honest change figure for the current refresh (e.g. the
+  // previous day's NBU rate failed to fetch), and printing "+0.00%" would be
+  // a fabricated "no change" rather than "no data" - the exact thing this
+  // codebase's NO DATA/NO INTRADAY DATA placeholders exist to avoid
+  // elsewhere. True (the default) is every existing source, which always
+  // has a change figure whenever valid is true.
+  bool has_change = true;
 };
 
 struct WeatherCurrent {
@@ -166,7 +175,7 @@ struct IndoorData {
 };
 
 struct Availability {
-  bool taiwan_market = true;
+  bool ua_fx = true;
   bool us_market = true;
   bool weather = true;
   bool indoor = true;
@@ -573,7 +582,7 @@ const char* ota_phase_label(OtaPhase phase);
 struct AppSnapshot {
   OtaData ota;
   ClockData clock;
-  MarketData taiwan_market;
+  MarketData ua_fx;
   MarketData us_market;
   WeatherData weather;
   WeatherData new_york_weather;
@@ -594,7 +603,7 @@ struct AppSnapshot {
   // prevent it; disjoint fields do, because there is no longer a shared
   // struct for either writer's wholesale assignment to reach across into.
   RuntimeEstimate battery_runtime;
-  DemoScenario scenario = DemoScenario::TaiwanSession;
+  DemoScenario scenario = DemoScenario::UaFxSession;
 };
 
 AppSnapshot make_mock_snapshot(DemoScenario scenario);

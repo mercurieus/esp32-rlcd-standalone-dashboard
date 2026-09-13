@@ -2,6 +2,7 @@
 #include "ui_fonts.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -287,10 +288,25 @@ void render_home_tile(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
       break;
     case HomeTileKind::Market:
       title = text(Text::TileMarket);
-      std::snprintf(value, sizeof(value), "%d",
-                    snapshot.taiwan_market.primary_value);
-      std::snprintf(detail, sizeof(detail), "%+.2f%%",
-                    snapshot.taiwan_market.primary_change_percent);
+      // value_has_decimals/has_change: see their own comments in
+      // app_snapshot.hpp. This tile only ever shows once ua_fx.valid is
+      // true (choose_home_tile()), and a genuine NBU rate always has
+      // decimals; has_change can still be false on the rare refresh with
+      // no honest change figure, so detail is left blank rather than a
+      // fabricated "+0.00%".
+      if (snapshot.ua_fx.value_has_decimals) {
+        std::snprintf(value, sizeof(value), "%d.%02d",
+                      snapshot.ua_fx.primary_value / 100,
+                      std::abs(snapshot.ua_fx.primary_value % 100));
+      } else {
+        std::snprintf(value, sizeof(value), "%d", snapshot.ua_fx.primary_value);
+      }
+      if (snapshot.ua_fx.has_change) {
+        std::snprintf(detail, sizeof(detail), "%+.2f%%",
+                      snapshot.ua_fx.primary_change_percent);
+      } else {
+        detail[0] = '\0';
+      }
       break;
     case HomeTileKind::Indoor:
       title = text(Text::TileIndoor);
@@ -338,13 +354,11 @@ void render_market_sidebar(lv_obj_t* parent,
   //
   // What is left is what the main area has not already said: the secondary
   // index, and the day's range when the provider gave an intraday series.
-  // Both are optional now, not just the range - Taiwan's Yahoo primary
-  // (market.cpp's refresh_taiwan()) answers one symbol per request and
-  // supplies no secondary index at all, unlike the TWSE fallback (TAIEX +
-  // TW50 from one response) or the US source (two requests, two indices).
-  // An empty secondary_label means "this source did not give us one", not
-  // "the value is genuinely zero" - showing it anyway would be a fabricated
-  // "0 / +0.00%" tile on a market that is actually open and moving.
+  // Both are optional: an empty secondary_label means "this source did not
+  // give us one" (not currently true for either page - both NBU and the
+  // US source always supply a secondary - but the check is cheap insurance
+  // against a future source that does not), not "the value is genuinely
+  // zero" - showing it anyway would be a fabricated "0 / +0.00%" tile.
   const bool has_secondary = market.valid && !market.secondary_label.empty();
   const bool has_range = market.valid && market.has_intraday;
   const int count = (has_secondary ? 1 : 0) + (has_range ? 1 : 0);
@@ -353,11 +367,21 @@ void render_market_sidebar(lv_obj_t* parent,
   int slot = 0;
   if (has_secondary) {
     char index_value[24];
+    if (market.value_has_decimals) {
+      std::snprintf(index_value, sizeof(index_value), "%d.%02d",
+                    market.secondary_value / 100,
+                    std::abs(market.secondary_value % 100));
+    } else {
+      std::snprintf(index_value, sizeof(index_value), "%d",
+                    market.secondary_value);
+    }
     char index_detail[24];
-    std::snprintf(index_value, sizeof(index_value), "%d",
-                  market.secondary_value);
-    std::snprintf(index_detail, sizeof(index_detail), "%+.2f%%",
-                  market.secondary_change_percent);
+    if (market.has_change) {
+      std::snprintf(index_detail, sizeof(index_detail), "%+.2f%%",
+                    market.secondary_change_percent);
+    } else {
+      index_detail[0] = '\0';
+    }
     tile(parent, market.secondary_label.c_str(), index_value, index_detail,
          stacked_tile_cell(bounds, slot, count), false, false, market.valid);
     ++slot;
@@ -504,8 +528,8 @@ lv_obj_t* render_page(UiContext& context,
   const Rect content = content_bounds(local_bounds, page.id);
 
   switch (page.id) {
-    case app_core::PageId::TaiwanMarket:
-      render_market(replacement, snapshot, snapshot.taiwan_market, content,
+    case app_core::PageId::UaFx:
+      render_market(replacement, snapshot, snapshot.ua_fx, content,
                     page_index, page_count, false, &context);
       break;
     case app_core::PageId::UsMarket:
@@ -598,7 +622,7 @@ lv_obj_t* render_page(UiContext& context,
 #ifndef NDEBUG
   // PageId ordinal, not a name: page_name() lives in another translation
   // unit's anonymous namespace and is not worth widening a public header for
-  // one diagnostic. Order is Home, TaiwanMarket, UsMarket, Weather, Indoor,
+  // one diagnostic. Order is Home, UaFx, UsMarket, Weather, Indoor,
   // Setup.
   assert_tree_in_safe_canvas(replacement, static_cast<int>(page.id));
 #endif

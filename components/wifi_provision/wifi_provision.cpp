@@ -330,9 +330,9 @@ void set_weather(const app_core::WeatherData& weather) {
   unlock();
 }
 
-void set_taiwan_market(const app_core::MarketData& market) {
+void set_ua_fx(const app_core::MarketData& market) {
   lock();
-  snapshot_.taiwan_market = market;
+  snapshot_.ua_fx = market;
   ui::publish_snapshot(snapshot_);
   unlock();
 }

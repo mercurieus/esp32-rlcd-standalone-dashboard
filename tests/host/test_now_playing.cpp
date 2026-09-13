@@ -42,7 +42,7 @@ HOST_TEST(now_playing_page_is_absent_with_no_session) {
   app_core::register_builtin_pages();
   app_core::PageRegistry registry;
   registry.begin_cycle(app_core::make_mock_snapshot(
-      app_core::DemoScenario::TaiwanSession));
+      app_core::DemoScenario::UaFxSession));
   EXPECT_TRUE(!cycle_contains(registry.page_keys(), app_core::PageId::NowPlaying));
 }
 
@@ -52,7 +52,7 @@ HOST_TEST(now_playing_page_joins_the_cycle_while_a_session_is_open) {
   app_core::register_builtin_pages();
   app_core::PageRegistry registry;
   registry.begin_cycle(app_core::make_mock_snapshot(
-      app_core::DemoScenario::TaiwanSession));
+      app_core::DemoScenario::UaFxSession));
   EXPECT_TRUE(cycle_contains(registry.page_keys(), app_core::PageId::NowPlaying));
   app_core::reset_media_registry_for_test();
 }

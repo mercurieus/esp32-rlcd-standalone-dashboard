@@ -55,7 +55,7 @@ void set_indoor(const app_core::IndoorData& indoor);
 // app_snapshot.hpp for the failure that came from getting this wrong once.
 void set_runtime_estimate(const app_core::RuntimeEstimate& estimate);
 void set_weather(const app_core::WeatherData& weather);
-void set_taiwan_market(const app_core::MarketData& market);
+void set_ua_fx(const app_core::MarketData& market);
 void set_us_market(const app_core::MarketData& market);
 void set_clock(const app_core::ClockData& clock);
 void set_ota(const app_core::OtaData& ota);

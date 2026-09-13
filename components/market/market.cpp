@@ -5,6 +5,8 @@
 #include "esp_log.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <ctime>
 #include <string>
 
 namespace market {
@@ -14,24 +16,22 @@ constexpr char kTag[] = "market";
 constexpr int kHttpTimeoutMs = 8000;
 
 // Bounded response buffers - an unbounded read of a remote body into a heap
-// allocation is a defect even with plenty of PSRAM to spare. TWSE's
-// MI_INDEX lists every index it publishes (~30-40 rows) in one response -
-// 46 KB was observed live against the real endpoint while building this.
-// Yahoo's 1-day/5-minute chart response for one symbol was ~7 KB live at
-// 15-minute bars and stays well inside this cap at 5-minute ones too - a
-// day's worth of extra timestamp/close entries is a few KB, not an order
-// of magnitude.
+// allocation is a defect even with plenty of PSRAM to spare. NBU's
+// all-currencies response lists every currency it publishes (~50 rows) in
+// one response - a few tens of KB, the same shape as TWSE's MI_INDEX this
+// buffer size was originally sized against. Yahoo's 1-day/5-minute chart
+// response for one symbol was ~7 KB live at 15-minute bars and stays well
+// inside this cap at 5-minute ones too - a day's worth of extra
+// timestamp/close entries is a few KB, not an order of magnitude.
 // Both caps below are generous multiples of that, not "as much as fits": a
 // response that blows the cap is simply truncated, and a truncated body
 // fails to parse (see market_parse.cpp) rather than being accepted
 // partially.
-constexpr int kTaiwanBufferBytes = 96 * 1024;
+constexpr int kNbuBufferBytes = 96 * 1024;
 constexpr int kYahooBufferBytes = 32 * 1024;
 
-app_core::MarketData g_taiwan;  // valid == false until the first success.
+app_core::MarketData g_ua_fx;  // valid == false until the first success.
 app_core::MarketData g_us;
-// See taiwan_using_primary_source() below.
-bool g_taiwan_using_primary = false;
 // See us_session_start() below.
 long long g_us_session_start = 0;
 
@@ -90,55 +90,68 @@ bool http_get(const char* url, int max_bytes, std::string& out_body) {
   return true;
 }
 
+// NBU's own base URL: no valcode means "every currency it publishes", and
+// an explicit date=YYYYMMDD asks for that specific day's rate rather than
+// the latest one (see market_parse.hpp's parse_nbu_rates() for the
+// response shape both calls share).
+constexpr char kNbuBaseUrl[] =
+    "https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange";
+
 }  // namespace
 
-bool refresh_taiwan() {
-  std::string primary_body;
-  IndexQuote primary;
-  bool primary_ok = false;
-  if (http_get(
-          "https://query1.finance.yahoo.com/v8/finance/chart/%5ETWII"
-          "?interval=5m&range=1d",
-          kYahooBufferBytes, primary_body)) {
-    primary_ok =
-        parse_yahoo_quote(primary_body.data(), primary_body.size(), "TAIEX",
-                          primary);
-    if (!primary_ok) {
-      ESP_LOGW(kTag,
-               "Yahoo TWII chart body did not parse (%zu bytes); falling "
-               "back to TWSE",
-               primary_body.size());
-    }
-  } else {
-    ESP_LOGW(kTag, "Yahoo TWII fetch failed; falling back to TWSE");
+bool refresh_ua_fx() {
+  std::string today_body;
+  app_core::MarketData today;
+  char today_url[96];
+  std::snprintf(today_url, sizeof(today_url), "%s?json", kNbuBaseUrl);
+  if (!http_get(today_url, kNbuBufferBytes, today_body) ||
+      !parse_nbu_rates(today_body.data(), today_body.size(), today)) {
+    ESP_LOGW(kTag, "NBU today fetch/parse failed (%zu bytes)",
+             today_body.size());
+    g_ua_fx = app_core::MarketData{};
+    return false;
   }
 
-  app_core::MarketData fallback;
-  bool fallback_ok = false;
-  if (!primary_ok) {
-    // Only reached once the primary has already failed - fetching both
-    // every cycle would double the request rate for a value normally
-    // discarded (see market.hpp's own comment on refresh_taiwan()).
-    std::string fallback_body;
-    if (http_get("https://openapi.twse.com.tw/v1/exchangeReport/MI_INDEX",
-                 kTaiwanBufferBytes, fallback_body)) {
-      fallback_ok = parse_taiwan_index(fallback_body.data(),
-                                       fallback_body.size(), fallback);
-      if (!fallback_ok) {
-        ESP_LOGW(kTag, "TWSE MI_INDEX body did not parse (%zu bytes)",
-                 fallback_body.size());
-      }
-    }
+  // Yesterday's calendar date, UTC rather than the device's own local
+  // timezone - the same reason market_parse.cpp's civil_from_unix() stays
+  // in UTC: NBU's rate never changes intraday, so being off by the few
+  // hours between UTC midnight and Kyiv midnight costs nothing here, and
+  // this avoids coupling this component to net_time's TZ state.
+  const std::time_t yesterday_epoch = std::time(nullptr) - 24 * 60 * 60;
+  std::tm yesterday_tm{};
+  gmtime_r(&yesterday_epoch, &yesterday_tm);
+  char yesterday_url[96];
+  std::snprintf(yesterday_url, sizeof(yesterday_url), "%s?date=%04d%02d%02d&json",
+               kNbuBaseUrl, yesterday_tm.tm_year + 1900,
+               yesterday_tm.tm_mon + 1, yesterday_tm.tm_mday);
+
+  std::string yesterday_body;
+  app_core::MarketData yesterday;
+  const bool have_yesterday =
+      http_get(yesterday_url, kNbuBufferBytes, yesterday_body) &&
+      parse_nbu_rates(yesterday_body.data(), yesterday_body.size(), yesterday);
+  if (!have_yesterday) {
+    ESP_LOGW(kTag,
+             "NBU yesterday fetch/parse failed; publishing today's rate "
+             "with no change figure");
   }
 
-  const TaiwanFetchOutcome outcome =
-      select_taiwan_source(primary_ok, primary, fallback_ok, fallback);
-  g_taiwan = outcome.data;
-  g_taiwan_using_primary = outcome.used_primary;
-  return outcome.ok;
+  // See has_change's own comment in app_snapshot.hpp: without yesterday's
+  // rate there is no honest change to report, so the field stays false
+  // rather than printing a fabricated "+0.00%".
+  today.has_change = have_yesterday;
+  if (have_yesterday) {
+    today.primary_change_percent =
+        (today.primary_value - yesterday.primary_value) * 100.0 /
+        yesterday.primary_value;
+    today.secondary_change_percent =
+        (today.secondary_value - yesterday.secondary_value) * 100.0 /
+        yesterday.secondary_value;
+  }
+
+  g_ua_fx = today;
+  return true;
 }
-
-bool taiwan_using_primary_source() { return g_taiwan_using_primary; }
 
 bool refresh_us() {
   std::string sp500_body;
@@ -209,7 +222,7 @@ bool refresh_us() {
 // snapshot that is no longer on screen.
 long long us_session_start() { return g_us.valid ? g_us_session_start : 0; }
 
-app_core::MarketData taiwan() { return g_taiwan; }
+app_core::MarketData ua_fx() { return g_ua_fx; }
 app_core::MarketData us() { return g_us; }
 
 }  // namespace market

@@ -27,7 +27,7 @@ bool rects_overlap(const ui::Rect a, const ui::Rect b) {
 
 HOST_TEST(setup_page_is_excluded_from_registry_and_page_count_stays_five) {
   app_core::AppSnapshot snapshot =
-      app_core::make_mock_snapshot(app_core::DemoScenario::TaiwanSession);
+      app_core::make_mock_snapshot(app_core::DemoScenario::UaFxSession);
   snapshot.setup.active = true;
   app_core::reset_page_registrations();
   app_core::register_builtin_pages();

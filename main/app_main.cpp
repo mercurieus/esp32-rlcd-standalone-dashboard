@@ -1095,74 +1095,41 @@ constexpr uint32_t kProviderRetryPeriodMs = 5 * 60'000;
   }
 }
 
-// Split from a single combined task into two independent ones: Taiwan's
-// interval is now market-hours-aware (a few minutes during the regular
-// session, the flat interval otherwise - see market_schedule.hpp's
-// taiwan_refresh_interval_seconds()) while US stays on the flat interval
-// unconditionally. A shared task can only sleep one duration between
-// iterations, so keeping them together would have meant either refreshing
-// US as often as Taiwan (paying for a cadence nothing asked for) or Taiwan
-// only as often as US (the exact staleness this split exists to fix).
+// Split from a single combined task into two independent ones: US and the
+// NBU exchange rate refresh on genuinely different cadences (30 min vs
+// hourly - see market.hpp's kRefreshIntervalSeconds/
+// kUaFxRefreshIntervalSeconds). A shared task can only sleep one duration
+// between iterations, so keeping them together would have meant paying for
+// a cadence neither side asked for.
 //
-// refresh_taiwan()/refresh_us() already set their own cache to invalid on
-// any total failure (network, bad shape, both sources down for Taiwan)
-// rather than leaving a stale or substituted value, so taiwan()/us() are
-// safe to publish unconditionally right after each refresh call.
-[[noreturn]] void taiwan_market_monitor_task(void*) {
+// refresh_ua_fx()/refresh_us() already set their own cache to invalid on
+// any total failure (network, bad shape) rather than leaving a stale or
+// substituted value, so ua_fx()/us() are safe to publish unconditionally
+// right after each refresh call.
+[[noreturn]] void ua_fx_monitor_task(void*) {
   wait_for_station_ip();
   for (;;) {
-    const bool ok = market::refresh_taiwan();
-    const app_core::MarketData taiwan = market::taiwan();
-    const bool using_primary = market::taiwan_using_primary_source();
-    // taiwan.session_elapsed_fraction is already correct here - see its
-    // own comment in app_snapshot.hpp: market_parse.cpp's
-    // parse_yahoo_quote() computes it directly from Yahoo's own response
-    // metadata, not from anything this task needs to derive. An earlier
-    // version of this task computed it here instead, from the device's
-    // own RTC and market_schedule.hpp's hardcoded session bounds -
-    // superseded once the Yahoo-metadata approach turned out to need no
-    // clock at all and to cover the US market the RTC-based one could not.
+    const bool ok = market::refresh_ua_fx();
+    const app_core::MarketData ua_fx = market::ua_fx();
+    ESP_LOGI(kTag, "ua_fx refresh ok=%d valid=%d usd=%d eur=%d has_change=%d",
+             ok, ua_fx.valid, ua_fx.primary_value, ua_fx.secondary_value,
+             ua_fx.has_change);
+    wifi_provision::set_ua_fx(ua_fx);
 
-    // source= logged every cycle, not just on a fallback: without it, a
-    // silent, permanent Yahoo failure would look identical in the log to a
-    // working board that simply has no intraday chart today, and it would
-    // go unnoticed for weeks.
-    ESP_LOGI(kTag,
-             "taiwan refresh ok=%d valid=%d value=%d intraday=%d source=%s "
-             "session_fraction=%.2f",
-             ok, taiwan.valid, taiwan.primary_value, taiwan.has_intraday,
-             using_primary ? "Yahoo" : "TWSE",
-             static_cast<double>(taiwan.session_elapsed_fraction));
-    wifi_provision::set_taiwan_market(taiwan);
-
-    uint32_t interval_ms;
-    if (!ok) {
-      // Both sources failed - the same fast retry every other provider
-      // uses, not the fallback-only slow interval: a total outage needs to
-      // be noticed and re-tried soon, not treated as "fallback is fine".
-      interval_ms = kProviderRetryPeriodMs;
-    } else {
-      // Deciding how soon to poll again is the one thing here that still
-      // needs the device's own clock and market_schedule.hpp's session
-      // bounds - unlike session_elapsed_fraction above, this has to be
-      // answered before the next response exists to read metadata from.
-      app_core::RtcDateTime local_time{};
-      const bool have_clock = net_time::synced() && net_time::now(local_time);
-      // Without a synced clock there is no trustworthy local time to judge
-      // market hours by; the flat interval is the same safe default this
-      // refresh already used before market-hours awareness existed.
-      interval_ms = static_cast<uint32_t>(
-                        have_clock ? market::taiwan_refresh_interval_seconds(
-                                         local_time, using_primary)
-                                   : market::kRefreshIntervalSeconds) *
-                    1000;
-    }
+    // No market-hours-style fast path: NBU changes its published rate at
+    // most once per business day (see market.cpp's refresh_ua_fx()), so a
+    // flat interval is all this ever needs - the fast retry below is only
+    // for an outright fetch failure, the same shape every other provider
+    // uses.
+    const uint32_t interval_ms =
+        ok ? static_cast<uint32_t>(market::kUaFxRefreshIntervalSeconds) * 1000
+           : kProviderRetryPeriodMs;
     vTaskDelay(pdMS_TO_TICKS(interval_ms));
   }
 }
 
-// US keeps the flat interval market.hpp defines (30 min) - unlike Taiwan it
-// gets no faster during its session. Only the *phase* is adjusted: the one
+// US keeps the flat interval market.hpp defines (30 min); only the *phase*
+// is adjusted: the one
 // sleep that would otherwise step over the open is cut short so a refresh
 // lands just after it, instead of the page holding the previous session -
 // complete, correctly dated, and read as "not open yet" - for up to half an
@@ -1186,8 +1153,7 @@ constexpr uint32_t kProviderRetryPeriodMs = 5 * 60'000;
     if (!ok) {
       interval_ms = kProviderRetryPeriodMs;
     } else {
-      // std::time() only once net_time has actually synced - the same rule
-      // net_time::now() enforces for the Taiwan task above. An unsynced
+      // std::time() only once net_time has actually synced. An unsynced
       // system clock is not a slightly wrong instant, it is 1970, and
       // handing that to a comparison against a real session boundary would
       // silently pick a sleep from arithmetic on a number that means
@@ -1277,7 +1243,7 @@ void format_clock(const app_core::RtcDateTime& clock, app_core::ClockData& out) 
 // is nothing here to retry in a loop.
 //
 // Created after wifi_provision::start(), same as net_log_startup_task and
-// the weather/taiwan-market/us-market monitor tasks above, and for the
+// the weather/ua-fx/us-market monitor tasks above, and for the
 // exact same reason: wait_for_station_ip() polls a mutex wifi_provision::
 // start() creates, so a task calling it must not exist before that call
 // returns. (A previous attempt got this backwards for net_log_startup_task
@@ -1430,7 +1396,7 @@ extern "C" void app_main() {
   ESP_LOGI(kTag, "startup diagnostics LVGL=ready");
 
   app_core::AppSnapshot snapshot =
-      app_core::make_mock_snapshot(app_core::DemoScenario::TaiwanSession);
+      app_core::make_mock_snapshot(app_core::DemoScenario::UaFxSession);
   // Everything on this board that is not the display hangs off one I2C bus,
   // including the ES7210 mic ADC nothing here drives yet. Logging what
   // actually answers costs one line per boot and settles "is the part
@@ -1621,19 +1587,20 @@ extern "C" void app_main() {
   // 8192 B each: market::http_get() heap-allocates its response body
   // (std::string), so unlike weather this task's stack only has to cover
   // the TLS handshake and JSON parsing depth for a request or two, not a
-  // large local buffer. Two tasks, not one, now that Taiwan and US refresh
-  // on genuinely different cadences - see taiwan_market_monitor_task's own
-  // comment for why a shared task could not do that.
+  // large local buffer. Two tasks, not one, now that the NBU rate and US
+  // market refresh on genuinely different cadences - see
+  // ua_fx_monitor_task's own comment for why a shared task could not do
+  // that.
   //
   // In PSRAM for the same reason as weather_monitor_task just above: both
   // are HTTPS+JSON fetchers that never touch flash/NVS (market::refresh_*
   // only calls market::http_get() and the pure-parsing market_parse.cpp/
   // market_schedule.cpp), and both loop forever so vTaskDeleteWithCaps is
   // moot for them too.
-  if (xTaskCreateWithCaps(&taiwan_market_monitor_task, "taiwan_market_monitor",
+  if (xTaskCreateWithCaps(&ua_fx_monitor_task, "ua_fx_monitor",
                           8192, nullptr, tskIDLE_PRIORITY + 1, nullptr,
                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
-    ESP_LOGE(kTag, "taiwan market monitor task creation failed");
+    ESP_LOGE(kTag, "ua_fx monitor task creation failed");
   }
   if (xTaskCreateWithCaps(&us_market_monitor_task, "us_market_monitor", 8192,
                           nullptr, tskIDLE_PRIORITY + 1, nullptr,
@@ -1669,7 +1636,7 @@ extern "C" void app_main() {
   // costs internal RAM - now exists. Note what this number does NOT
   // include: update_check_task's and the audio tone/sweep tasks' stacks
   // (on demand, in PSRAM, see their own comments), and weather_monitor_task/
-  // taiwan_market_monitor_task/us_market_monitor_task's stacks (permanent,
+  // ua_fx_monitor_task/us_market_monitor_task's stacks (permanent,
   // but also in PSRAM - see their own comments above) - none of these ever
   // show up in this budget at all.
   ESP_LOGI(kTag,
