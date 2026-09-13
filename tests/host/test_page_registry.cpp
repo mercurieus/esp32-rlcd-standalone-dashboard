@@ -233,9 +233,20 @@ HOST_TEST(mock_fixture_contains_required_deterministic_content) {
 
   EXPECT_EQ(snapshot.indoor.temperature_c, 24.8);
   EXPECT_EQ(snapshot.indoor.humidity_percent, 57);
+  // The leading -10.5 C and 100 %RH are deliberate: the fixture carries the
+  // widest readings the indoor page's value row can be asked to draw, so a
+  // column sized against pleasant numbers fails here rather than on a panel
+  // in January. See make_mock_snapshot's own comment.
   EXPECT_EQ(snapshot.indoor.temperature_history_c,
-            (std::array<double, 8>{24.2, 24.3, 24.5, 24.6,
+            (std::array<double, 8>{-10.5, 24.3, 24.5, 24.6,
                                    24.7, 24.8, 24.8, 24.8}));
+  EXPECT_EQ(snapshot.indoor.humidity_history_percent,
+            (std::array<uint8_t, 8>{100, 58, 57, 57, 56, 56, 57, 57}));
+  // Both counts stay 0 for the same reason every other figure on this
+  // fixture is invalid: these are layout fixtures, not readings, and the
+  // chart must draw COLLECTING... rather than a line through them.
+  EXPECT_EQ(static_cast<int>(snapshot.indoor.temperature_history_count), 0);
+  EXPECT_EQ(static_cast<int>(snapshot.indoor.humidity_history_count), 0);
 
   // ua_fx has no intraday series (NBU publishes once per day, like the old
   // TWSE fallback) - the mock builder never sets intraday_samples, so it

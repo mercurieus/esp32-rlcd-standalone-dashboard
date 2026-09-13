@@ -19,7 +19,6 @@ constexpr Row kRows[] = {
     {"NO DATA", "無資料"},
     {"NO INTRADAY DATA", "無盤中資料"},
     {" OLD", " 過期"},
-    {"COMFORT BAND  40-60 RH", "舒適範圍  40-60 RH"},
 
     {"Setup", "設定連線"},
     {"AP SSID unavailable", "無法取得熱點名稱"},
@@ -79,8 +78,6 @@ constexpr Row kRows[] = {
     {"ALERT  ", "警示  "},
     {"LOW BATTERY", "電量偏低"},
     {"OVERVOLTAGE", "電壓過高"},
-    {"DRY", "偏乾"},
-    {"WET", "偏濕"},
     {"OPEN", "開盤"},
     {"MID", "盤中"},
     {"CLOSE", "收盤"},

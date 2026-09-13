@@ -172,6 +172,16 @@ struct IndoorData {
   // indistinguishable from measurements of 0 C, and the chart drew a line
   // through them - a shape made of numbers nobody recorded.
   uint8_t temperature_history_count = 0;
+  // Humidity's own series, whole percent as the SHTC3 and HistorySample both
+  // carry it. Appended on the same tick as the temperature above, so index i
+  // of each array is the same moment - the chart draws them against one time
+  // axis and nothing reconciles two clocks to make that true.
+  std::array<uint8_t, 8> humidity_history_percent{};
+  // Its own count, not shared with temperature's. A slot can hold one reading
+  // without the other (see history_recent_humidity in history.hpp), so one
+  // series can legitimately be shorter than its neighbour and must not be
+  // padded up to match.
+  uint8_t humidity_history_count = 0;
 };
 
 struct Availability {

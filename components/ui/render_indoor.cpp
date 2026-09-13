@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <new>
+#include <string>
 
 namespace ui {
 namespace {
@@ -25,22 +26,9 @@ void release_points(lv_event_t* event) {
 // is zeros, and a line through those is a shape made of readings nobody took -
 // the same objection this project has to a flat intraday chart drawn from a
 // repeated close.
-void mini_history(lv_obj_t* parent, const Rect bounds,
-                  const std::array<double, 8>& history, std::size_t count) {
-  if (count < 2) {
-    // One point is not a trend, and zero is not a chart. Say which.
-    label(parent, text(Text::HistoryCollecting), bounds, small_font(),
-          LV_TEXT_ALIGN_CENTER);
-    return;
-  }
-  std::array<int, 8> samples{};
-  for (std::size_t index = 0; index < count; ++index) {
-    samples[index] = static_cast<int>(history[index] * 10.0);
-  }
-  // Scale across the recorded span only, so a half-full history uses the whole
-  // width instead of trailing off into the empty slots.
-  const auto normalized =
-      normalize_chart_samples_n(samples, bounds, count);
+void solid_series(lv_obj_t* parent, const Rect bounds,
+                  const std::array<ChartPoint, 8>& normalized,
+                  std::size_t count) {
   auto* points = new (std::nothrow) lv_point_precise_t[count];
   if (points == nullptr) return;
   for (std::size_t index = 0; index < count; ++index) {
@@ -60,6 +48,189 @@ void mini_history(lv_obj_t* parent, const Rect bounds,
   lv_obj_set_style_line_rounded(line, false, 0);
   lv_line_set_points(line, points, static_cast<uint32_t>(count));
   lv_obj_add_event_cb(line, release_points, LV_EVENT_DELETE, points);
+}
+
+// The second series, dashed so it can be told from the first one on a panel
+// with no colour and no grey to spend.
+//
+// Walked as short rectangles rather than drawn as an lv_line: LVGL 9 has no
+// dash style, and render_market.cpp's dotted_grid already establishes
+// hand-stepped dashes as how this project draws a broken line. Each dash is
+// kDataLineWidth tall so it carries the same weight as the solid series -
+// a 1 px dash would speckle away on this glass.
+void dashed_series(lv_obj_t* parent,
+                   const std::array<ChartPoint, 8>& normalized,
+                   std::size_t count) {
+  constexpr int kDashLength = 4;
+  constexpr int kDashGap = 3;
+  for (std::size_t index = 0; index + 1 < count; ++index) {
+    const ChartPoint from = normalized[index];
+    const ChartPoint to = normalized[index + 1];
+    const int span = to.x - from.x;
+    if (span <= 0) continue;
+    for (int offset = 0; offset < span; offset += kDashLength + kDashGap) {
+      const int length = std::min(kDashLength, span - offset);
+      // Linear interpolation along the segment, so a dash sits on the line
+      // it belongs to rather than on the chord between sample columns.
+      const int y = from.y + (to.y - from.y) * (offset + length / 2) / span;
+      line_segment(parent, from.x + offset, y, length, kDataLineWidth);
+    }
+  }
+}
+
+// Solid bar or three dashes, matching how each series is drawn in the plot.
+// This is what binds a stroke style to a measure; without it the two lines
+// are two anonymous shapes.
+void legend_swatch(lv_obj_t* parent, const Rect bounds, bool dashed) {
+  const int y = bounds.y + bounds.height / 2 - kDataLineWidth / 2;
+  if (!dashed) {
+    line_segment(parent, bounds.x, y, bounds.width, kDataLineWidth);
+    return;
+  }
+  constexpr int kDashLength = 4;
+  constexpr int kDashGap = 3;
+  for (int offset = 0; offset < bounds.width;
+       offset += kDashLength + kDashGap) {
+    const int length = std::min(kDashLength, bounds.width - offset);
+    line_segment(parent, bounds.x + offset, y, length, kDataLineWidth);
+  }
+}
+
+// Swatch, measure icon and trend arrow, in that order.
+constexpr int kLegendClusterWidth = 46;
+constexpr int kLegendClusterGap = 10;
+
+// The two readings one end of the chart carries, e.g. "24.8°C 57%". Either
+// half is omitted when its series has no point to report, so a page with one
+// working measure still says something true rather than printing a
+// placeholder for the other.
+std::string readings_text(bool has_temperature, double celsius,
+                          bool has_humidity, int humidity_percent) {
+  std::string out;
+  if (has_temperature) {
+    out += temperature_text(static_cast<float>(celsius), 1);
+  }
+  if (has_humidity) {
+    if (!out.empty()) out += " ";
+    char buffer[8];
+    std::snprintf(buffer, sizeof(buffer), "%d%%", humidity_percent);
+    out += buffer;
+  }
+  return out;
+}
+
+void render_history_block(lv_obj_t* parent, const app_core::IndoorData& indoor,
+                          const IndoorHistoryLayout layout) {
+  label(parent, text(Text::TileHistory), layout.title, small_font());
+
+  // Clamped rather than trusted: these counts cross a task boundary on the
+  // snapshot, and an index past the end of the array is a far worse failure
+  // than a chart one point short.
+  const std::size_t temperature_count =
+      std::min<std::size_t>(indoor.temperature_history_count,
+                            indoor.temperature_history_c.size());
+  const std::size_t humidity_count =
+      std::min<std::size_t>(indoor.humidity_history_count,
+                            indoor.humidity_history_percent.size());
+
+  // Each series in its own integer unit - decidegrees and whole percent -
+  // which is what trend_for_series' thresholds are written against and what
+  // normalize_chart_samples_n wants anyway.
+  std::array<int, 8> temperature_samples{};
+  for (std::size_t i = 0; i < temperature_count; ++i) {
+    temperature_samples[i] =
+        static_cast<int>(indoor.temperature_history_c[i] * 10.0);
+  }
+  std::array<int, 8> humidity_samples{};
+  for (std::size_t i = 0; i < humidity_count; ++i) {
+    humidity_samples[i] = indoor.humidity_history_percent[i];
+  }
+
+  // Judged per series, not once for both, so one line can be drawn while the
+  // other is still collecting.
+  //
+  // In practice the two counts move together: app_main's take_slot() writes
+  // temperature and humidity from one accumulator gated on one environment
+  // sample count, so a flash slot holds both readings or neither, and the
+  // live appends add to both arrays on the same tick. That is what makes
+  // index i of each array the same moment - which is the whole basis for
+  // drawing them against one time axis. If the counts ever did diverge, each
+  // series would still be spread across the full plot width and their x
+  // positions would stop corresponding; the fix then is to make the
+  // recorder pair them again, not to reconcile it here.
+  const bool draw_temperature = temperature_count >= 2;
+  const bool draw_humidity = humidity_count >= 2;
+
+  if (!draw_temperature && !draw_humidity) {
+    // One point is not a trend, and zero is not a chart. Say which, where
+    // the chart would have been.
+    label(parent, text(Text::HistoryCollecting), layout.plot, small_font(),
+          LV_TEXT_ALIGN_CENTER);
+    return;
+  }
+
+  // Each series is scaled over its own min..max, so the two lines' vertical
+  // positions carry no meaning against each other - only each line's own
+  // shape does, and the readings below carry the numbers. Do not "fix" this
+  // by sharing one scale: a degree and a percent have no common axis, and
+  // whichever series had the narrower range would flatten into a straight
+  // line that reads as a room holding steady when it is not.
+  if (draw_temperature) {
+    solid_series(parent, layout.plot,
+                 normalize_chart_samples_n(temperature_samples, layout.plot,
+                                           temperature_count),
+                 temperature_count);
+  }
+  if (draw_humidity) {
+    dashed_series(parent,
+                  normalize_chart_samples_n(humidity_samples, layout.plot,
+                                            humidity_count),
+                  humidity_count);
+  }
+
+  // Laid out right to left so temperature ends up on the left of humidity,
+  // and so a series that is not drawn takes its legend with it rather than
+  // leaving a gap or a swatch for a line that is not there.
+  const auto draw_cluster = [&](int x, bool dashed, bool temperature,
+                                TrendKind trend) {
+    legend_swatch(parent, {x, layout.legend.y, 14, layout.legend.height},
+                  dashed);
+    const Rect icon{x + 18, layout.legend.y + 2, 13,
+                    layout.legend.height - 4};
+    if (temperature) {
+      temperature_icon(parent, icon);
+    } else {
+      humidity_icon(parent, icon);
+    }
+    trend_icon(parent, {x + 33, layout.legend.y, 13, layout.legend.height},
+               trend);
+  };
+
+  int cluster_x = layout.legend.right() - kLegendClusterWidth;
+  if (draw_humidity) {
+    draw_cluster(cluster_x, true, false,
+                 trend_for_series(humidity_samples, humidity_count,
+                                  kHumidityTrend));
+    cluster_x -= kLegendClusterWidth + kLegendClusterGap;
+  }
+  if (draw_temperature) {
+    draw_cluster(cluster_x, false, true,
+                 trend_for_series(temperature_samples, temperature_count,
+                                  kTemperatureTrend));
+  }
+
+  const std::string oldest = readings_text(
+      draw_temperature, draw_temperature ? indoor.temperature_history_c[0] : 0.0,
+      draw_humidity, draw_humidity ? indoor.humidity_history_percent[0] : 0);
+  const std::string newest = readings_text(
+      draw_temperature,
+      draw_temperature ? indoor.temperature_history_c[temperature_count - 1]
+                       : 0.0,
+      draw_humidity,
+      draw_humidity ? indoor.humidity_history_percent[humidity_count - 1] : 0);
+  label(parent, oldest.c_str(), layout.oldest, small_font());
+  label(parent, newest.c_str(), layout.newest, small_font(),
+        LV_TEXT_ALIGN_RIGHT);
 }
 
 }  // namespace
@@ -98,29 +269,7 @@ void render_indoor(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
     label(parent, humidity, {primary.x + 211, primary.y + 44,
                              primary.width - 219, 28}, medium_font(),
           LV_TEXT_ALIGN_RIGHT);
-    label(parent, text(Text::ComfortBand),
-          {primary.x + 8, primary.y + 98, primary.width - 16, 18}, small_font());
-    const int band_x = primary.x + 14;
-    const int band_y = primary.y + 129;
-    const int band_width = primary.width - 28;
-    line_segment(parent, band_x, band_y, band_width, 2);
-    line_segment(parent, band_x + band_width * 40 / 100, band_y - 5,
-                 band_width * 20 / 100, 12);
-    const int humidity_x = band_x + band_width *
-                                       std::min(100, static_cast<int>(
-                                                         snapshot.indoor.humidity_percent)) /
-                                       100;
-    line_segment(parent, humidity_x, band_y - 8, 2, 18);
-    label(parent, text(Text::StatusDry), {band_x, band_y + 14, 42, 18}, small_font());
-    label(parent, "OK", {band_x + band_width / 2 - 12, band_y + 14, 24, 18},
-          small_font(), LV_TEXT_ALIGN_CENTER);
-    label(parent, text(Text::StatusHumid), {band_x + band_width - 48, band_y + 14, 48, 18},
-          small_font(), LV_TEXT_ALIGN_RIGHT);
-    label(parent, text(Text::TileHistory), {primary.x + 8, primary.y + 174, 72, 18},
-          small_font());
-    mini_history(parent, {primary.x + 8, primary.y + 195, primary.width - 16, 35},
-                 snapshot.indoor.temperature_history_c,
-                 snapshot.indoor.temperature_history_count);
+    render_history_block(parent, snapshot.indoor, indoor_history_layout(primary));
   }
 
   // No sidebar. The market pages used to lend this page their column, which
