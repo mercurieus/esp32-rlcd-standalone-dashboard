@@ -1519,9 +1519,33 @@ struct IndoorLayout {
   Rect humidity;
   Rect humidity_trend;
   Rect divider;
-  Rect plot;                 // both curves, their markers and the hour rules
-  Rect axis_oldest;          // time of the leftmost point
-  Rect axis_newest;          // time of the rightmost point
+  Rect plot;                 // both curves and the hour rules
+  // Where each series' own vertical extent is written down: its maximum at
+  // the top of the strip, its minimum at the bottom. Temperature reads down
+  // the left, humidity down the right, matching nothing in particular except
+  // that the two have to be told apart and the header's swatches say which
+  // stroke is which.
+  //
+  // These exist because the two curves are scaled independently - a degree
+  // and a percent share no axis, so each is stretched over its own min..max
+  // and the plot's vertical extent means something different for each line.
+  // Without the numbers at the edges, the only honest reading of a curve's
+  // height is "higher than it was", which is half a chart.
+  //
+  // They replaced four value markers that floated at whichever point
+  // happened to be the extreme. Those were correct and unreadable: they
+  // moved every refresh, collided with the curves they annotated, and made
+  // the reader hunt for the number instead of glancing at a fixed place.
+  Rect scale_left;
+  Rect scale_right;
+  // The strip under the plot, one hour label centred beneath each hour rule.
+  //
+  // This replaced a pair of 80 px boxes pinned at the ends, carrying the
+  // exact times of the first and last data points. Those said when the
+  // window started and stopped and nothing about the middle, and they sat on
+  // the only row an hour scale could use. A label per rule answers the same
+  // question at every point on the axis instead of at two of them.
+  Rect axis;
 };
 
 // The page title's box. 60 px was measured against the wrong string: the
@@ -1531,6 +1555,23 @@ struct IndoorLayout {
 // its two pixels back with room over; the header groups start ~100 px to the
 // right, so this is free.
 inline constexpr int kIndoorTitleWidth = 64;
+// Each scale strip: the number, plus the 6 px tick that points at the value,
+// plus label()'s 1 px of inset each side.
+//
+// Sized from what the panel actually reported rather than from an example.
+// 38 was measured against whole degrees ("26°") and then the minimum,
+// maximum and average gained a decimal, because those three are measurements
+// and rounding 26.4 to 26 would print a figure the sensor never gave. The
+// board said so immediately:
+//
+//   clipped: "24.5°" needs 35px, box gives 30px
+//
+// The worst case is a signed reading with a decimal - "-15.0°" is about
+// 40 px at montserrat_14 - so 50 leaves the text 42 px and a margin. Beyond
+// that (a sensor reporting its -40..125 C extremes, which is a room nobody
+// is reading a chart in) LV_LABEL_LONG_DOT ellipsises and logs, which is the
+// designed behaviour rather than silent overprinting.
+inline constexpr int kIndoorScaleWidth = 50;
 inline constexpr int kIndoorSwatchWidth = 14;
 inline constexpr int kIndoorMeasureIconWidth = 13;
 inline constexpr int kIndoorTrendIconWidth = 14;
@@ -1567,6 +1608,16 @@ constexpr IndoorLayout indoor_layout(const Rect bounds) {
   const int plot_height = 160;
   const int axis_y = plot_y + plot_height + 3;
 
+  // The scales sit inside the plot, not in gutters beside it. Gutters were
+  // tried and cost 76 px of the 372 available - the chart came back from the
+  // panel as visibly tightened, which is a poor trade for two columns that
+  // are mostly blank. Overlaying them costs nothing horizontal, and
+  // legibility is handled by the labels being opaque: label() applies the
+  // same white surface every widget here gets, so a number knocks a hole in
+  // whatever grid or curve runs behind it instead of tangling with it.
+  const int plot_x = bounds.x + inset;
+  const int plot_width = full_width;
+
   return IndoorLayout{
       {bounds.x + inset, bounds.y + 8, kIndoorTitleWidth, row_height},
       {temperature_swatch_x, header_y, kIndoorSwatchWidth, header_height},
@@ -1580,9 +1631,11 @@ constexpr IndoorLayout indoor_layout(const Rect bounds) {
       {humidity_x, header_y, humidity_width, header_height},
       {humidity_trend_x, header_y, kIndoorTrendIconWidth, header_height},
       {bounds.x + inset, bounds.y + 36, full_width, kSeparatorWidth},
-      {bounds.x + inset, plot_y, full_width, plot_height},
-      {bounds.x + inset, axis_y, 80, row_height},
-      {bounds.right() - inset - 80, axis_y, 80, row_height},
+      {plot_x, plot_y, plot_width, plot_height},
+      {plot_x, plot_y, kIndoorScaleWidth, plot_height},
+      {plot_x + plot_width - kIndoorScaleWidth, plot_y, kIndoorScaleWidth,
+       plot_height},
+      {plot_x, axis_y, plot_width, row_height},
   };
 }
 
@@ -1598,8 +1651,50 @@ static_assert(
     rect_within(content_bounds(safe_canvas(), app_core::PageId::Indoor),
                 indoor_layout(
                     content_bounds(safe_canvas(), app_core::PageId::Indoor))
-                    .axis_newest),
+                    .axis),
     "the indoor time axis stays inside the content bounds");
+static_assert(
+    indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .axis.x ==
+        indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .plot.x,
+    "the hour scale starts where the plot does, or its labels point at the "
+    "wrong rules");
+static_assert(
+    indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .axis.width ==
+        indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .plot.width,
+    "the hour scale spans exactly the plot, for the same reason");
+static_assert(
+    rect_within(content_bounds(safe_canvas(), app_core::PageId::Indoor),
+                indoor_layout(
+                    content_bounds(safe_canvas(), app_core::PageId::Indoor))
+                    .scale_right),
+    "the humidity scale stays inside the content bounds");
+// The scales overlay the plot by design, so what is worth proving is that
+// they stay within it - a label that escaped the plot would land on the
+// divider above or the hour row below.
+static_assert(
+    rect_within(
+        indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .plot,
+        indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .scale_left),
+    "the temperature scale stays inside the plot it annotates");
+static_assert(
+    rect_within(
+        indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .plot,
+        indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .scale_right),
+    "the humidity scale stays inside the plot it annotates");
+static_assert(
+    indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .scale_left.right() <
+        indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .scale_right.x,
+    "the two scales cannot overprint each other");
 static_assert(
     indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
             .title.right() <
@@ -1612,12 +1707,6 @@ static_assert(
         indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
             .humidity_swatch.x,
     "the two header measure groups do not run into each other");
-static_assert(
-    indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
-            .axis_oldest.right() <
-        indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
-            .axis_newest.x,
-    "the two axis time labels cannot overprint each other");
 
 struct HomeLayout {
   Rect hero;
