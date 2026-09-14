@@ -47,7 +47,15 @@ namespace {
 
 constexpr char kTag[] = "app_main";
 constexpr uint8_t kRtcAddress = 0x51;
+constexpr uint8_t kRtcControl1Register = 0x00;
 constexpr uint8_t kRtcSecondsRegister = 0x04;
+// Control_1 bit 5. Set, the oscillator is halted: the time registers keep
+// whatever was last written to them and never advance. Nothing here used to
+// touch this bit, which is the whole reason it is named now - see write_rtc.
+constexpr uint8_t kRtcStopBit = 0x20;
+// Seconds bit 7, the oscillator-stop flag: the chip raises it whenever it has
+// lost timekeeping, and only a write to the seconds register clears it.
+constexpr uint8_t kRtcOscillatorStopFlag = 0x80;
 
 app_core::RtcDateTime compile_clock() {
   app_core::RtcDateTime result{};
@@ -95,14 +103,51 @@ bool read_rtc(app_core::RtcDateTime& clock) {
 
   // PCF85063 register-pointer selection followed by a receive is read-only:
   // no RTC register is ever written by this probe.
-  uint8_t register_pointer = kRtcSecondsRegister;
-  uint8_t registers[7]{};
+  //
+  // Read from Control_1 rather than from the seconds register, so the control
+  // bytes come back in the same transaction as the time. They cost two bytes
+  // and they are the difference between "the RTC is invalid" and knowing why:
+  // a halted oscillator (STOP) and a chip that lost power (OS) produce
+  // completely different displays and need opposite fixes, and this probe
+  // could not previously tell them apart.
+  uint8_t register_pointer = kRtcControl1Register;
+  uint8_t registers[11]{};
   result = i2c_master_transmit_receive(device, &register_pointer,
                                        sizeof(register_pointer), registers,
                                        sizeof(registers), 100);
-  if (result != ESP_OK || (registers[0] & 0x80U) != 0 ||
-      !app_core::decode_pcf85063(registers, sizeof(registers), clock)) {
+  if (result != ESP_OK) {
+    ESP_LOGW(kTag, "RTC probe read failed: %s; using compile-time fallback",
+             esp_err_to_name(result));
+    return false;
+  }
+
+  const uint8_t control1 = registers[0];
+  uint8_t* time_registers = registers + kRtcSecondsRegister;
+  // Logged every boot, unconditionally, including the boots where everything
+  // is fine. A frozen clock reads back as perfectly valid data, so the only
+  // thing that separates it from a working one is these two bits - and a
+  // diagnostic that only prints on the failure path is no use when the
+  // failure is "the number looks plausible and never changes".
+  ESP_LOGI(kTag,
+           "RTC raw: control1=0x%02x control2=0x%02x seconds=0x%02x "
+           "(STOP=%d OS=%d)",
+           control1, registers[1], time_registers[0],
+           (control1 & kRtcStopBit) != 0 ? 1 : 0,
+           (time_registers[0] & kRtcOscillatorStopFlag) != 0 ? 1 : 0);
+
+  if ((time_registers[0] & kRtcOscillatorStopFlag) != 0 ||
+      !app_core::decode_pcf85063(time_registers, 7, clock)) {
     ESP_LOGW(kTag, "RTC absent or invalid; using compile-time fallback");
+    return false;
+  }
+  if ((control1 & kRtcStopBit) != 0) {
+    // Readable and stationary. Believing it would put a fixed time on the
+    // panel that survives every reboot and looks exactly like a working
+    // clock, which is the worse failure - so this is treated as no clock at
+    // all until write_rtc restarts the oscillator.
+    ESP_LOGW(kTag,
+             "RTC oscillator is halted (Control_1 STOP set); its time is "
+             "frozen, using compile-time fallback until a sync restarts it");
     return false;
   }
   return true;
@@ -129,17 +174,66 @@ bool write_rtc(const app_core::RtcDateTime& clock) {
   if (board::board_i2c_add_device(kRtcAddress, 100'000, device) != ESP_OK) {
     return false;
   }
+  // Control_1 first, because the time write below has to be bracketed by it.
+  //
+  // The PCF85063 sets its time in three steps - halt the oscillator, write the
+  // registers, start it again - and this code did only the middle one. That is
+  // not a missing nicety: the seconds write clears the oscillator-stop flag
+  // whatever STOP is doing, so writing into a chip whose oscillator was left
+  // halted produces a clock that reads back as perfectly valid and never
+  // advances. Every boot then restores the same frozen time, which is
+  // indistinguishable from a working RTC until you watch it for a minute.
+  //
+  // Read-modify-write rather than writing a constant: Control_1 also carries
+  // the 12/24-hour selection and the capacitor-select bit, and clobbering
+  // those to set one bit would trade this bug for a subtler one.
+  uint8_t control_pointer = kRtcControl1Register;
+  uint8_t control1 = 0;
+  esp_err_t result = i2c_master_transmit_receive(
+      device, &control_pointer, sizeof(control_pointer), &control1,
+      sizeof(control1), 100);
+  if (result != ESP_OK) {
+    ESP_LOGW(kTag, "RTC control read failed: %s", esp_err_to_name(result));
+    return false;
+  }
+
+  const uint8_t halted = static_cast<uint8_t>(control1 | kRtcStopBit);
+  const uint8_t running = static_cast<uint8_t>(control1 & ~kRtcStopBit);
+  uint8_t stop_payload[2] = {kRtcControl1Register, halted};
+  result = i2c_master_transmit(device, stop_payload, sizeof(stop_payload), 100);
+  if (result != ESP_OK) {
+    ESP_LOGW(kTag, "RTC stop failed: %s", esp_err_to_name(result));
+    return false;
+  }
+
   // Register pointer followed by the seven values, in one transaction: the
   // chip auto-increments, and splitting it would let the seconds roll over
   // between writes.
   uint8_t payload[8];
   payload[0] = kRtcSecondsRegister;
   std::memcpy(payload + 1, registers, sizeof(registers));
-  const esp_err_t result =
-      i2c_master_transmit(device, payload, sizeof(payload), 100);
+  result = i2c_master_transmit(device, payload, sizeof(payload), 100);
   if (result != ESP_OK) {
     ESP_LOGW(kTag, "RTC write failed: %s", esp_err_to_name(result));
+    // Leaving the oscillator halted here would be worse than the failed write
+    // itself, so start it again before giving up.
+    uint8_t restart[2] = {kRtcControl1Register, running};
+    (void)i2c_master_transmit(device, restart, sizeof(restart), 100);
     return false;
+  }
+
+  uint8_t start_payload[2] = {kRtcControl1Register, running};
+  result = i2c_master_transmit(device, start_payload, sizeof(start_payload), 100);
+  if (result != ESP_OK) {
+    ESP_LOGW(kTag, "RTC start failed: %s; the time was written but the "
+                   "oscillator is halted and will not advance",
+             esp_err_to_name(result));
+    return false;
+  }
+  if ((control1 & kRtcStopBit) != 0) {
+    ESP_LOGW(kTag, "RTC oscillator had been halted (Control_1 was 0x%02x); "
+                   "restarted it",
+             control1);
   }
   ESP_LOGI(kTag, "RTC set from network time: %04u-%02u-%02u %02u:%02u:%02u",
            clock.year, clock.month, clock.day, clock.hour, clock.minute,
