@@ -7,4 +7,6 @@ idf_component_register(
     PRIV_REQUIRES
         app_core
         esp_netif
+        esp_event
+        log
 )
