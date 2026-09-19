@@ -79,6 +79,11 @@ bool parse_forecast_json(const char* json, std::size_t length,
     cJSON* current_code =
         cJSON_GetObjectItemCaseSensitive(current, "weather_code");
     if (!cJSON_IsNumber(temperature) || !cJSON_IsNumber(current_code)) break;
+    // Optional, unlike the two above: a missing apparent_temperature leaves
+    // the reading unshown rather than failing the whole forecast, because
+    // everything else in this response is still true without it.
+    cJSON* apparent =
+        cJSON_GetObjectItemCaseSensitive(current, "apparent_temperature");
 
     cJSON* daily = cJSON_GetObjectItemCaseSensitive(root, "daily");
     if (!cJSON_IsObject(daily)) break;
@@ -118,6 +123,10 @@ bool parse_forecast_json(const char* json, std::size_t length,
         static_cast<int>(current_code->valuedouble));
     parsed.current.rain_probability_percent =
         clamp_percent(today_rain_prob->valuedouble);
+    if (cJSON_IsNumber(apparent)) {
+      parsed.current.has_feels_like = true;
+      parsed.current.feels_like_c = apparent->valuedouble;
+    }
 
     bool days_ok = true;
     for (int i = 0; i < kDays; ++i) {
@@ -160,7 +169,8 @@ bool parse_forecast_json(const char* json, std::size_t length,
 }
 
 bool parse_geolocation_json(const char* json, std::size_t length,
-                             double& latitude, double& longitude) {
+                             double& latitude, double& longitude,
+                             std::string& city) {
   cJSON* root = cJSON_ParseWithLength(json, length);
   if (root == nullptr) return false;
 
@@ -172,6 +182,15 @@ bool parse_geolocation_json(const char* json, std::size_t length,
       cJSON_IsNumber(lat_item) && cJSON_IsNumber(lon_item)) {
     latitude = lat_item->valuedouble;
     longitude = lon_item->valuedouble;
+    // The city rides along in the response the coordinates already came
+    // from, so naming the place costs no extra request. Optional: a
+    // response without it still yields a usable location, and the page
+    // shows no city rather than a placeholder.
+    cJSON* city_item = cJSON_GetObjectItemCaseSensitive(root, "city");
+    city.clear();
+    if (cJSON_IsString(city_item) && city_item->valuestring != nullptr) {
+      city = city_item->valuestring;
+    }
     ok = true;
   }
 

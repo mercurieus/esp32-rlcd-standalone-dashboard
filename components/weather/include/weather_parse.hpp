@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include "app_snapshot.hpp"
 
 #include <cstddef>
@@ -30,6 +31,7 @@ bool parse_forecast_json(const char* json, std::size_t length,
 // carries numeric latitude/longitude fields; otherwise returns false and
 // leaves latitude/longitude untouched.
 bool parse_geolocation_json(const char* json, std::size_t length,
-                             double& latitude, double& longitude);
+                             double& latitude, double& longitude,
+                             std::string& city);
 
 }  // namespace weather

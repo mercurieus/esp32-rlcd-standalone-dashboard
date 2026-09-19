@@ -107,7 +107,12 @@ MarketData us_market() {
 
 WeatherData taipei_weather() {
   WeatherData weather;
-  weather.current = {"Taipei", "Cloudy", 29.0, 40};
+  weather.current = {.location = "Taipei",
+                     .condition = "Cloudy",
+                     .temperature_c = 29.0,
+                     .has_feels_like = true,
+                     .feels_like_c = 31.0,
+                     .rain_probability_percent = 40};
   weather.alert = true;
   weather.seven_day = {{{"Sat", "Cloudy", 30.0, 25.0, 25},
                         {"Sun", "Rain", 28.0, 24.0, 70},
@@ -121,7 +126,12 @@ WeatherData taipei_weather() {
 
 WeatherData new_york_weather() {
   WeatherData weather;
-  weather.current = {"New York", "Sunny", 22.0, 15};
+  weather.current = {.location = "New York",
+                     .condition = "Sunny",
+                     .temperature_c = 22.0,
+                     .has_feels_like = true,
+                     .feels_like_c = 20.0,
+                     .rain_probability_percent = 15};
   weather.alert = false;
   weather.seven_day = {{{"Sat", "Sunny", 24.0, 18.0, 10},
                         {"Sun", "Cloudy", 23.0, 17.0, 25},

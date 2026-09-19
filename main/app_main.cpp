@@ -29,6 +29,7 @@
 #include <array>
 #include <cstdio>
 #include <cstring>
+#include <optional>
 #include <ctime>
 #include <string>
 
@@ -1172,11 +1173,38 @@ constexpr uint32_t kProviderStaggerMs = 4000;
 // endpoint gets hammered.
 constexpr uint32_t kProviderRetryPeriodMs = 5 * 60'000;
 
+// The last time a weather fetch actually succeeded, so a later failure can
+// keep showing when the reading on screen was really taken instead of
+// dropping the stamp and implying it is unknown.
+std::optional<app_core::RtcDateTime> g_weather_fetched;
+
 [[noreturn]] void weather_monitor_task(void*) {
   wait_for_station_ip(2 * kProviderStaggerMs);
   for (;;) {
     const bool ok = weather::refresh();
-    const app_core::WeatherData current = weather::current();
+    app_core::WeatherData current = weather::current();
+    // Stamped here rather than inside weather::current(), which is a pure
+    // cache read with no business knowing the wall clock - and stamped only
+    // on a fetch that actually succeeded, so a failed refresh leaves the
+    // previous reading wearing the time it was really taken.
+    //
+    // Only with a synced clock, the same rule the sensor chart's axis
+    // follows: before SNTP lands the device's time is a compile-time guess,
+    // and a reading stamped with that would claim to be fresh forever.
+    app_core::RtcDateTime fetched{};
+    if (ok && net_time::synced() && net_time::now(fetched)) {
+      current.fetched_time_known = true;
+      current.fetched_hour = fetched.hour;
+      current.fetched_minute = fetched.minute;
+      g_weather_fetched = current.fetched_time_known
+                              ? std::optional<app_core::RtcDateTime>(fetched)
+                              : std::nullopt;
+    } else if (g_weather_fetched.has_value()) {
+      // A failed refresh keeps the stamp of the reading still on screen.
+      current.fetched_time_known = true;
+      current.fetched_hour = g_weather_fetched->hour;
+      current.fetched_minute = g_weather_fetched->minute;
+    }
     // Logged on success as well as failure: a silent success and a silent
     // failure are indistinguishable from a serial capture, and that ambiguity
     // has cost this project several debugging cycles already.

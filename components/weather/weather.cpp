@@ -1,3 +1,4 @@
+#include <string>
 #include "weather.hpp"
 
 #include <cstdio>
@@ -27,6 +28,10 @@ LocationSource g_source = LocationSource::IpGeolocation;
 double g_latitude = 0.0;
 double g_longitude = 0.0;
 bool g_have_location = false;
+// Whatever the geolocation step last named this place. Held here rather than
+// re-derived per fetch: the forecast request is addressed by coordinates and
+// carries no city, and the geolocation call is the only thing that knows.
+std::string g_city;
 
 // GETs `url` into `buffer` (capacity `buffer_size`, including the
 // terminating NUL), null-terminates it, and reports the byte count read.
@@ -88,13 +93,14 @@ esp_err_t http_get(const char* url, char* buffer, int buffer_size,
 // This sends the device's public IP address to ipwho.is (a third party) in
 // order to derive an approximate location. It is the default; a manual
 // override (set_manual_location) avoids it entirely.
-bool resolve_ip_location(double& latitude, double& longitude) {
+bool resolve_ip_location(double& latitude, double& longitude,
+                         std::string& city) {
   char buffer[kGeolocationBufferBytes];
   int len = 0;
   if (http_get("https://ipwho.is/", buffer, sizeof(buffer), len) != ESP_OK) {
     return false;
   }
-  return parse_geolocation_json(buffer, len, latitude, longitude);
+  return parse_geolocation_json(buffer, len, latitude, longitude, city);
 }
 
 }  // namespace
@@ -106,11 +112,13 @@ bool refresh() {
   if (g_source == LocationSource::IpGeolocation) {
     double resolved_lat = 0.0;
     double resolved_lon = 0.0;
-    if (resolve_ip_location(resolved_lat, resolved_lon)) {
+    std::string resolved_city;
+    if (resolve_ip_location(resolved_lat, resolved_lon, resolved_city)) {
       latitude = resolved_lat;
       longitude = resolved_lon;
       g_latitude = latitude;
       g_longitude = longitude;
+      g_city = resolved_city;
       g_have_location = true;
     } else {
       ESP_LOGW(kTag, "IP geolocation failed; %s",
@@ -132,7 +140,7 @@ bool refresh() {
   std::snprintf(
       url, sizeof(url),
       "https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"
-      "&current=temperature_2m,weather_code"
+      "&current=temperature_2m,apparent_temperature,weather_code"
       "&daily=weather_code,temperature_2m_max,temperature_2m_min,"
       "precipitation_probability_max"
       "&timezone=auto&forecast_days=7",
@@ -148,6 +156,11 @@ bool refresh() {
     return false;
   }
 
+  // The forecast response knows nothing about city names - it is addressed
+  // by coordinates - so the name comes from the geolocation step above and
+  // is attached here. Empty on the manual-location path, which is the
+  // honest answer: nothing on that path ever asked what the place is called.
+  parsed.current.location = g_city;
   g_cache = parsed;
   g_last_success_us = esp_timer_get_time();
   return true;

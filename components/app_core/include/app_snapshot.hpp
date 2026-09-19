@@ -137,9 +137,20 @@ struct MarketData {
 };
 
 struct WeatherCurrent {
+  // The city the forecast is for, from the same IP-geolocation response the
+  // coordinates came from. Empty when the location was set manually: no
+  // geolocation call is made on that path, so there is no city to report and
+  // inventing one from lat/lon would be a second network dependency in
+  // exchange for a guess.
   std::string location;
   std::string condition;
   double temperature_c = 0.0;
+  // Apparent temperature - what the air does to a person, once wind and
+  // humidity are accounted for. Its own flag rather than a sentinel: a
+  // provider that omits the field must show nothing, and 0.0 C is a
+  // perfectly ordinary reading to be handed by one that did not.
+  bool has_feels_like = false;
+  double feels_like_c = 0.0;
   uint8_t rain_probability_percent = 0;
 };
 
@@ -159,6 +170,16 @@ struct WeatherData {
   WeatherCurrent current;
   std::array<WeatherDay, 7> seven_day{};
   bool alert = false;
+  // When this reading was fetched, in the device's local time.
+  //
+  // Known only once the clock is, exactly as the sensor chart's axis is (see
+  // IndoorData::history_time_known): before SNTP lands, the device's idea of
+  // the time is a compile-time guess, and stamping a reading with it would
+  // be inventing the one fact the stamp exists to carry. `stale` already
+  // says "old enough to distrust"; this says how old.
+  bool fetched_time_known = false;
+  uint8_t fetched_hour = 0;
+  uint8_t fetched_minute = 0;
 };
 
 // How many points the sensor page charts. Sixteen across a 372 px plot is a

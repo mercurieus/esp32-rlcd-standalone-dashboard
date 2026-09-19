@@ -18,6 +18,7 @@ constexpr char kFullResponse[] = R"JSON({
     "time": "2026-08-16T09:00",
     "interval": 900,
     "temperature_2m": 29.4,
+    "apparent_temperature": 32.1,
     "weather_code": 3
   },
   "daily": {
@@ -47,6 +48,9 @@ HOST_TEST(weather_parse_forecast_full_response_is_valid_with_seven_days) {
   // Today's (index 0) daily max is used as the "current" rain probability
   // proxy, since Open-Meteo has no current-block field for it.
   EXPECT_EQ(static_cast<int>(data.current.rain_probability_percent), 40);
+  EXPECT_TRUE(data.current.has_feels_like);
+  EXPECT_TRUE(data.current.feels_like_c > 32.0 &&
+              data.current.feels_like_c < 32.2);
 
   EXPECT_EQ(data.seven_day[0].day, std::string("Sun"));
   EXPECT_EQ(data.seven_day[1].day, std::string("Mon"));
@@ -147,18 +151,41 @@ HOST_TEST(weather_parse_geolocation_extracts_lat_lon_on_success) {
     "ip": "203.0.113.42",
     "success": true,
     "type": "IPv4",
-    "latitude": 25.0375,
-    "longitude": 121.5637
+    "city": "Kyiv",
+    "latitude": 50.4501,
+    "longitude": 30.5234
   })JSON";
 
   double latitude = 0.0;
   double longitude = 0.0;
+  std::string city;
   const bool ok = weather::parse_geolocation_json(
-      kGeoResponse, std::strlen(kGeoResponse), latitude, longitude);
+      kGeoResponse, std::strlen(kGeoResponse), latitude, longitude, city);
 
   EXPECT_TRUE(ok);
-  EXPECT_TRUE(latitude > 25.03 && latitude < 25.04);
-  EXPECT_TRUE(longitude > 121.56 && longitude < 121.57);
+  EXPECT_TRUE(latitude > 50.44 && latitude < 50.46);
+  EXPECT_TRUE(longitude > 30.51 && longitude < 30.53);
+  EXPECT_EQ(city, std::string("Kyiv"));
+}
+
+// A response without the field is still a usable location. The page shows no
+// city rather than a placeholder, so the city must come back empty and the
+// parse must still succeed.
+HOST_TEST(weather_parse_geolocation_survives_a_response_with_no_city) {
+  constexpr char kNoCity[] = R"JSON({
+    "success": true,
+    "latitude": 50.4501,
+    "longitude": 30.5234
+  })JSON";
+
+  double latitude = 0.0;
+  double longitude = 0.0;
+  std::string city = "stale";
+  const bool ok = weather::parse_geolocation_json(
+      kNoCity, std::strlen(kNoCity), latitude, longitude, city);
+
+  EXPECT_TRUE(ok);
+  EXPECT_TRUE(city.empty());
 }
 
 HOST_TEST(weather_parse_geolocation_fails_on_reported_failure) {
@@ -171,8 +198,9 @@ HOST_TEST(weather_parse_geolocation_fails_on_reported_failure) {
 
   double latitude = 1.0;
   double longitude = 2.0;
+  std::string city;
   const bool ok = weather::parse_geolocation_json(
-      kGeoFailure, std::strlen(kGeoFailure), latitude, longitude);
+      kGeoFailure, std::strlen(kGeoFailure), latitude, longitude, city);
 
   EXPECT_TRUE(!ok);
   // Untouched on failure.
@@ -183,7 +211,8 @@ HOST_TEST(weather_parse_geolocation_fails_on_malformed_json) {
   constexpr char kGarbage[] = "{not json";
   double latitude = 0.0;
   double longitude = 0.0;
+  std::string city;
   const bool ok = weather::parse_geolocation_json(kGarbage, std::strlen(kGarbage),
-                                                    latitude, longitude);
+                                                    latitude, longitude, city);
   EXPECT_TRUE(!ok);
 }
