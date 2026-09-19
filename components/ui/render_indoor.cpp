@@ -114,7 +114,21 @@ void draw_solid_run(lv_obj_t* parent, const Rect plot,
     delete[] points;
     return;
   }
-  apply_surface(line);
+  // Deliberately NOT apply_surface(): it sets bg_opa to LV_OPA_COVER with
+  // white, and this object is sized to the whole plot, so an opaque
+  // background paints a white rectangle over everything already drawn - the
+  // hour rules, the average rules, and the other series' curve.
+  //
+  // That is what "the hour rule is invisible" and "the humidity line is
+  // invisible" both were. Neither was a stroke too thin to survive the 1-bit
+  // threshold; each was a sibling painted on top of it. Three stroke widths
+  // were tried against that theory before the draw order explained it - the
+  // curve you could see was whichever one happened to be drawn last.
+  lv_obj_set_style_bg_opa(line, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(line, 0, 0);
+  lv_obj_set_style_shadow_width(line, 0, 0);
+  lv_obj_set_style_pad_all(line, 0, 0);
+  lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_pos(line, plot.x, plot.y);
   lv_obj_set_size(line, plot.width, plot.height);
   lv_obj_set_style_line_color(line, lv_color_black(), 0);
@@ -126,15 +140,12 @@ void draw_solid_run(lv_obj_t* parent, const Rect plot,
 
 // How the two curves are told apart on a panel with no colour and no grey.
 //
-// By stroke weight, and each curve is one lv_line object. It was dashes
-// before, hand-stepped because LVGL 9 has no dash style for lines - which
-// cost 53 widgets for the humidity curve alone, against 1 for the solid
-// temperature curve, and was a direct contributor to the heap exhaustion
-// that crashed this page three times. Weight is free.
+// By stroke weight: temperature 4 px, humidity 2 px, each one lv_line.
 //
-// Neither may go below 2 px. A 1 px rule was tried for the hour grid and
-// came back from the board as invisible, and a curve is mostly diagonal,
-// which is where thin strokes break into speckle on this display.
+// 2 px is fine, and the three rounds spent insisting otherwise were chasing
+// the wrong cause - see draw_solid_run above, where an opaque background on
+// a plot-sized object was erasing whichever curve had been drawn first. With
+// that fixed a thin stroke is simply a thin stroke.
 constexpr int kTemperatureLineWidth = 4;
 constexpr int kHumidityLineWidth = 2;
 
@@ -168,12 +179,15 @@ void draw_series(lv_obj_t* parent, const Rect plot, std::size_t origin,
 // tried first and they are the smaller thing.
 //
 // `candidates` is smallest-first, in the series' own storage units, and the
-// first one that keeps the label count inside the budget wins. Both lists
+// first one that keeps the tick count inside the budget wins. Both lists
 // start at the unit a person actually thinks in for that measure - a whole
-// degree, five percent - and coarsen from there, so a quiet room gets a
-// fine scale and a day of weather gets a legible one rather than forty
-// labels.
-constexpr int kMaxScaleTicks = 6;
+// degree, one percent - and coarsen from there, so a quiet room gets a fine
+// scale and a day of weather gets a legible one rather than forty marks.
+//
+// Ten, not the six this allowed when every tick carried a number. Ticks are
+// 2 px marks now and the numbers are limited separately, so the scale can
+// afford to be fine enough to count steps along.
+constexpr int kMaxScaleTicks = 10;
 
 int scale_step(int minimum, int maximum, const int* candidates,
                std::size_t count) {
@@ -260,17 +274,26 @@ void draw_scale(lv_obj_t* parent, const Rect plot, const Rect strip,
   constexpr int kTickLength = 6;
   const int text_width = strip.width - kTickLength;
 
-  // Label tops already spoken for. Fixed capacity: the extremes, the
-  // average, and at most kMaxScaleTicks intermediates.
-  std::array<int, kMaxScaleTicks + 3> taken{};
+  // Label tops already spoken for, and the tick heights that go with them.
+  // Fixed capacity: the two extremes and the average.
+  constexpr std::size_t kMaxLabels = 3;
+  std::array<int, kMaxLabels> taken{};
+  std::array<int, kMaxLabels> taken_tick{};
+  // The value each reserved slot belongs to. Carried rather than re-derived
+  // from the slot's position: a reservation can be refused for overlap, so
+  // "slot 1 is the minimum" stops being true the moment one is skipped.
+  std::array<int, kMaxLabels> taken_value{};
   std::size_t taken_count = 0;
 
+  // Which values get a number, decided before anything is drawn so the step
+  // ticks below can stand aside for them.
+  //
   // `exact` keeps a decimal for temperature: the extremes and the average
-  // are measurements, and rounding 26.4 to 26 would print a number the
-  // sensor never reported. The intermediates are scale references, not
+  // are measurements, and rounding 26.4 to 26 would print a figure the
+  // sensor never reported. The step marks are scale references, not
   // readings, so they stay whole.
-  const auto place = [&](int value, bool exact) {
-    if (taken_count >= taken.size()) return;
+  const auto reserve = [&](int value) {
+    if (taken_count >= kMaxLabels) return;
     const int y = value_y(strip, series, value);
     int text_y = y - kLabelHeight / 2;
     if (text_y < plot.y) text_y = plot.y;
@@ -282,35 +305,59 @@ void draw_scale(lv_obj_t* parent, const Rect plot, const Rect strip,
         return;
       }
     }
-    taken[taken_count++] = text_y;
+    taken[taken_count] = text_y;
+    taken_tick[taken_count] = y;
+    taken_value[taken_count] = value;
+    ++taken_count;
+  };
 
+  // The extremes say what the curve's whole vertical extent means; the
+  // average is the one figure about the window rather than about a moment.
+  reserve(series.maximum);
+  reserve(series.minimum);
+  reserve(series.average);
+
+  // Ticks at every whole unit, numbers at almost none.
+  //
+  // A tick is two pixels wide and costs nothing to read; a number is 40 px of
+  // ink competing with the curves behind it. Separating them lets the scale
+  // stay fine-grained - you can count steps to read any height off a curve -
+  // while the page carries only the few figures worth printing.
+  //
+  // A step mark within kTickMergeDistance of a labelled one is skipped. A
+  // maximum of 25.8 and a whole-degree mark at 26.0 land two pixels apart,
+  // which read as one thick smudged tick rather than two facts; the labelled
+  // height is the measured one, so it is the one that stays.
+  constexpr int kTickMergeDistance = 4;
+  const int mark_x = mirrored ? strip.x + text_width : strip.x;
+  const int first = (series.minimum + step - 1) / step * step;
+  for (int value = first; value <= series.maximum; value += step) {
+    const int tick_y = value_y(strip, series, value);
+    bool collides = false;
+    for (std::size_t i = 0; i < taken_count; ++i) {
+      const int gap = tick_y - taken_tick[i];
+      if (gap > -kTickMergeDistance && gap < kTickMergeDistance) {
+        collides = true;
+        break;
+      }
+    }
+    if (collides) continue;
+    line_segment(parent, mark_x, tick_y, kTickLength, kDataLineWidth);
+  }
+
+  // The numbers themselves, each with the tick at its own measured height.
+  for (std::size_t i = 0; i < taken_count; ++i) {
+    const int value = taken_value[i];
     char caption[20];
-    if (temperature && exact) {
+    if (temperature) {
       std::snprintf(caption, sizeof(caption), "%.1f°", value / 10.0);
-    } else if (temperature) {
-      std::snprintf(caption, sizeof(caption), "%d°", value / 10);
     } else {
       std::snprintf(caption, sizeof(caption), "%d%%", value);
     }
-
-    // Tick on the outside, number inboard of it. The ticks then stand at the
-    // very start and the very end of the plot - where an axis belongs -
-    // instead of pointing in at the data from two floating columns. Built
-    // the other way round first, which put four short marks in the middle of
-    // the drawing with nothing to anchor them to.
-    const int tick_x = mirrored ? strip.x + text_width : strip.x;
     const int text_x = mirrored ? strip.x : strip.x + kTickLength;
-    label(parent, caption, {text_x, text_y, text_width, kLabelHeight},
+    label(parent, caption, {text_x, taken[i], text_width, kLabelHeight},
           small_font(), mirrored ? LV_TEXT_ALIGN_RIGHT : LV_TEXT_ALIGN_LEFT);
-    line_segment(parent, tick_x, y, kTickLength, kDataLineWidth);
-  };
-
-  place(series.maximum, true);
-  place(series.minimum, true);
-  place(series.average, true);
-  const int first = (series.minimum + step - 1) / step * step;
-  for (int value = first; value <= series.maximum; value += step) {
-    place(value, false);
+    line_segment(parent, mark_x, taken_tick[i], kTickLength, kDataLineWidth);
   }
 }
 
