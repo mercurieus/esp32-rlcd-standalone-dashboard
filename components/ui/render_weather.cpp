@@ -49,17 +49,77 @@ void render_weather(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
   // out to the right edge. 264px takes the longest WMO wordings at 28px with
   // room to spare, and LONG_DOT means anything longer still ellipsises inside
   // its own row instead of bleeding into the one below.
+  // Line one is the headline: what the weather is, and how warm it is.
+  //
+  // The temperature used to sit in the sub-row beside the rain figure, at
+  // small font, which made the page's most-read number its least visible
+  // one. It is a caption to the condition and is now set like one.
+  //
+  // The condition keeps the left of the row and yields what the reading
+  // needs; both ellipsise rather than collide, and the longest WMO wordings
+  // still fit 200px at 28px.
   label(parent, current.condition.c_str(),
-        {bounds.x + 66, bounds.y + 4, 264, 35}, hero_font());
+        {bounds.x + 66, bounds.y + 4, 200, 35}, hero_font());
+  label(parent, temperature_text(current.temperature_c, 1).c_str(),
+        {bounds.x + 270, bounds.y + 4, bounds.width - 278, 35}, hero_font(),
+        LV_TEXT_ALIGN_RIGHT);
+
+  // The city, which until now was an empty label: nothing ever assigned
+  // WeatherCurrent::location. It comes from the geolocation response the
+  // coordinates already came from, and stays empty on the manual-location
+  // path, which never asks anyone what the place is called.
+  //
+  // 114px, measured against a real place rather than a short one. 72px was
+  // sized for "Kyiv" (about 32px) and the board answered with the city it
+  // was actually in:
+  //
+  //   clipped: "Chernivtsi" needs 104px, box gives 70px
+  //
+  // Moving the temperature up to line one is what paid for this - the
+  // sub-row no longer carries it, so the width went to the caption that
+  // needed it.
   label(parent, current.location.c_str(),
-        {bounds.x + 68, bounds.y + 41, 131, 20}, medium_font());
-  char current_line[48];
-  std::snprintf(current_line, sizeof(current_line), "%s   RAIN %u%%%s",
-                temperature_text(current.temperature_c, 1).c_str(),
-                current.rain_probability_percent,
-                weather.stale ? text(Text::StaleSuffix) : "");
+        {bounds.x + 68, bounds.y + 41, 114, 20}, medium_font());
+
+  // What it feels like, the chance of rain, and when this was fetched - the
+  // qualifiers, on the row under the headline they qualify.
+  //
+  // FEELS is left untranslated to match the RAIN that was already here.
+  // has_feels_like rather than a sentinel: a provider that omits the field
+  // must show nothing, and 0.0 C is an ordinary reading (see WeatherCurrent).
+  //
+  // The stamp is drawn only with a synced clock (see
+  // WeatherData::fetched_time_known) - an unsynced board shows no time
+  // rather than a compile-time guess dressed up as a fetch time. The time
+  // only, no date: a date needs about 90px this page has nowhere to take
+  // from, and `stale` already carries "old enough to distrust".
+  char current_line[96];
+  char stamp[12] = "";
+  if (weather.fetched_time_known) {
+    std::snprintf(stamp, sizeof(stamp), "  %02u:%02u", weather.fetched_hour,
+                  weather.fetched_minute);
+  }
+  if (current.has_feels_like) {
+    std::snprintf(current_line, sizeof(current_line),
+                  "FEELS %s  RAIN %u%%%s%s",
+                  temperature_text(current.feels_like_c, 1).c_str(),
+                  current.rain_probability_percent,
+                  weather.stale ? text(Text::StaleSuffix) : "", stamp);
+  } else {
+    std::snprintf(current_line, sizeof(current_line), "RAIN %u%%%s%s",
+                  current.rain_probability_percent,
+                  weather.stale ? text(Text::StaleSuffix) : "", stamp);
+  }
+  // The row this lands in:
+  // 192px of text, which takes today's "FEELS 12.8°C  RAIN 3%  01:52" (about
+  // 175px, extrapolated from the 201px the panel measured for a longer
+  // string) with room over. A winter extreme - two negative two-digit
+  // temperatures and a three-digit rain figure - runs about 215px and will
+  // ellipsise, logged. That is the deliberate end of the trade: the city
+  // beside it is a name that must be readable every day, not only on the
+  // coldest one.
   label(parent, current_line,
-        {bounds.x + 205, bounds.y + 42, bounds.width - 213, 20}, small_font(),
+        {bounds.x + 186, bounds.y + 42, bounds.width - 194, 20}, small_font(),
         LV_TEXT_ALIGN_RIGHT);
   divider(parent, {bounds.x + 8, bounds.y + 70, bounds.width - 16,
                    kSeparatorWidth});
