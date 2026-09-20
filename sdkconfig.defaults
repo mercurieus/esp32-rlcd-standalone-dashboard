@@ -10,7 +10,22 @@ CONFIG_FREERTOS_HZ=1000
 # The initial LVGL object tree is built synchronously from app_main so startup
 # failures can stop before the carousel timer is armed. The ESP-IDF default
 # 3584-byte main-task stack overflows while rendering the first full page.
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+#
+# Raised from 8192 after that overflowed too, in a boot loop that showed as a
+# dark screen: "A stack overflow in task main has been detected", every boot,
+# immediately after the history restore.
+#
+# 8192 had not been comfortable for a while and the board had been saying so.
+# ui_app.cpp logs the headroom on every boot and it read:
+#
+#   ui_app: main task stack free before UI init=120 bytes
+#
+# 120 bytes, before the render that needs the most. That is not headroom, it
+# is a fuse - the next change to touch the first-render path was always going
+# to blow it, and adding a glyph descriptor to the weather icons did. The
+# number to watch is that log line; if it ever drops into the hundreds again,
+# this value is the thing to raise, not the code to shrink.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
 CONFIG_LV_FONT_MONTSERRAT_28=y
