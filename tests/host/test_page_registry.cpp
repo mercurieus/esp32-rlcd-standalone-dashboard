@@ -187,10 +187,10 @@ HOST_TEST(mock_fixture_contains_required_deterministic_content) {
   EXPECT_EQ(snapshot.clock.date, std::string("Sat, 15 Aug 2026"));
   EXPECT_EQ(snapshot.clock.source, std::string("Clock Hero"));
 
-  EXPECT_EQ(snapshot.ua_fx.primary_label, std::string("USD/UAH"));
+  EXPECT_EQ(snapshot.ua_fx.primary_label, std::string("USD"));
   EXPECT_EQ(snapshot.ua_fx.primary_value, 4'455);
   EXPECT_EQ(snapshot.ua_fx.primary_change_percent, 0.18);
-  EXPECT_EQ(snapshot.ua_fx.secondary_label, std::string("EUR/UAH"));
+  EXPECT_EQ(snapshot.ua_fx.secondary_label, std::string("EUR"));
   EXPECT_EQ(snapshot.ua_fx.secondary_change_percent, -0.09);
   EXPECT_EQ(snapshot.ua_fx.secondary_value, 5'168);
   EXPECT_TRUE(snapshot.ua_fx.value_has_decimals);

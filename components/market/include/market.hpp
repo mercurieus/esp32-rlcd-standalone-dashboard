@@ -65,6 +65,17 @@ long long us_session_start();
 // Returns the current cached snapshot. No I/O; safe to call from any task,
 // including the LVGL thread.
 app_core::MarketData ua_fx();
+
+// True when the last refresh_ua_fx() published real rates but could not get
+// the 30-day history behind them - the clock was not yet synced (the request
+// is a date range, and this board has no RTC battery), or the fetch failed.
+//
+// It exists so the caller can retry soon instead of sleeping the hourly
+// success interval: the rates are correct and worth publishing immediately,
+// but the page is missing its chart, and waiting an hour to notice is the
+// difference between a chart that appears in minutes and one that does not
+// appear at all to anyone who looks.
+bool ua_fx_incomplete();
 app_core::MarketData us();
 
 }  // namespace market

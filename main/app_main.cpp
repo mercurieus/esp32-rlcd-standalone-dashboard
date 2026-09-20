@@ -1173,6 +1173,20 @@ constexpr uint32_t kProviderStaggerMs = 4000;
 // endpoint gets hammered.
 constexpr uint32_t kProviderRetryPeriodMs = 5 * 60'000;
 
+// Separate, much shorter period for the one case that is not an outage: the
+// rates published fine but the NBU history could not be asked for yet,
+// because it is a date-range request and the clock is still at the epoch
+// (this board has no RTC battery). That resolves itself the moment SNTP
+// lands - measured at 31.7 s on this board - so the wait should be sized
+// against that, not against a broken endpoint.
+//
+// The five-minute period was tried first and never fired: the board was
+// observed rebooting around 160 s, so a retry scheduled for 305 s was simply
+// never reached and the chart stayed empty across every boot. Twenty seconds
+// puts an attempt at ~25 s and the next at ~45 s, the first of which lands
+// after a normal sync, and costs two extra small GETs on a cold boot.
+constexpr uint32_t kUaFxHistoryRetryPeriodMs = 20'000;
+
 // The last time a weather fetch actually succeeded, so a later failure can
 // keep showing when the reading on screen was really taken instead of
 // dropping the stamp and implying it is unknown.
@@ -1242,9 +1256,19 @@ std::optional<app_core::RtcDateTime> g_weather_fetched;
     // flat interval is all this ever needs - the fast retry below is only
     // for an outright fetch failure, the same shape every other provider
     // uses.
-    const uint32_t interval_ms =
-        ok ? static_cast<uint32_t>(market::kUaFxRefreshIntervalSeconds) * 1000
-           : kProviderRetryPeriodMs;
+    //
+    // A refresh that published real rates but came back without the 30-day
+    // history is not a success to sleep an hour on. That is the normal
+    // first-boot case: this task waits only for an IP, and the history is a
+    // date-range request, so it is asked for before SNTP lands and comes back
+    // empty. Retrying on the short period means the chart fills in minutes.
+    uint32_t interval_ms =
+        static_cast<uint32_t>(market::kUaFxRefreshIntervalSeconds) * 1000;
+    if (!ok) {
+      interval_ms = kProviderRetryPeriodMs;
+    } else if (market::ua_fx_incomplete()) {
+      interval_ms = kUaFxHistoryRetryPeriodMs;
+    }
     vTaskDelay(pdMS_TO_TICKS(interval_ms));
   }
 }

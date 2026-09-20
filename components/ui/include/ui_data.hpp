@@ -1367,6 +1367,27 @@ constexpr Rect home_tile_cell(const Rect column, int index, int count) {
 // Highest and lowest of the intraday series. Only meaningful when the provider
 // actually supplied one - a daily-close source repeats its close, and a range
 // of zero drawn as a range would read as "the market did not move".
+// Picks the coarsest "nice" interval from `candidates` (which must be in
+// ascending order, in whatever integer unit the series is kept) that puts no
+// more than `max_ticks` whole multiples inside [minimum, maximum].
+//
+// Shared by both charts deliberately. An axis whose marks land on round
+// numbers is the difference between a grid you can read a value off and one
+// you can only interpolate against, and two separate implementations of that
+// rule is how the two pages end up disagreeing about what "round" means.
+constexpr int scale_step(int minimum, int maximum, const int* candidates,
+                         std::size_t count, int max_ticks) {
+  for (std::size_t i = 0; i < count; ++i) {
+    const int step = candidates[i];
+    // Whole multiples of `step` inside [minimum, maximum], counted the same
+    // way the drawing loops walk them.
+    const int first = (minimum + step - 1) / step * step;
+    if (first > maximum) return step;
+    if ((maximum - first) / step + 1 <= max_ticks) return step;
+  }
+  return candidates[count - 1];
+}
+
 struct MarketRange {
   int high = 0;
   int low = 0;

@@ -18,15 +18,6 @@ void release_chart_points(lv_event_t* event) {
   delete[] points;
 }
 
-void dotted_grid(lv_obj_t* parent, const Rect chart) {
-  for (int row = 1; row <= 3; ++row) {
-    const int y = chart.y + (chart.height * row) / 4;
-    for (int x = chart.x + 1; x < chart.right() - 1; x += 9) {
-      line_segment(parent, x, y, std::min(4, chart.right() - x - 1), 1);
-    }
-  }
-}
-
 // `count` - not source.size() - is how many of `source` are real: since
 // app_snapshot.hpp's MarketData::intraday_sample_count can be smaller than
 // the array's own app_core::kIntradaySampleCount (early in a session,
@@ -47,7 +38,20 @@ void polyline(lv_obj_t* parent,
     delete[] points;
     return;
   }
-  apply_surface(line);
+  // Deliberately NOT apply_surface(): it sets bg_opa to LV_OPA_COVER with
+  // white, and this object is sized to the whole chart, so an opaque
+  // background paints a white rectangle over everything drawn before it -
+  // here, the dotted grid, which has been invisible on this page for exactly
+  // that reason, and now the rate scale and axis ticks too.
+  //
+  // This is the same defect that made the indoor chart's hour rules and
+  // humidity curve disappear; see draw_solid_run() in render_indoor.cpp,
+  // where three stroke widths were tried before the draw order explained it.
+  lv_obj_set_style_bg_opa(line, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(line, 0, 0);
+  lv_obj_set_style_shadow_width(line, 0, 0);
+  lv_obj_set_style_pad_all(line, 0, 0);
+  lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_pos(line, chart.x, chart.y);
   lv_obj_set_size(line, chart.width, chart.height);
   lv_obj_set_style_line_color(line, lv_color_black(), 0);
@@ -55,6 +59,132 @@ void polyline(lv_obj_t* parent,
   lv_obj_set_style_line_rounded(line, false, 0);
   lv_line_set_points(line, points, count);
   lv_obj_add_event_cb(line, release_chart_points, LV_EVENT_DELETE, points);
+}
+
+
+// The widest value a scale label can hold, measured from
+// lv_font_montserrat_14's own glyph table rather than from today's rate: '4'
+// is the widest digit at 9.375 px and '.' is 3.1875, so "999.99" is 50.1 px.
+// Sized for three integer digits deliberately - a box that only fits two is a
+// bet on the hryvnia, and the label would clip the day it lost.
+constexpr int kRateLabelWidth = 52;
+constexpr int kRateTickLength = 5;
+constexpr int kRateScaleGap = 3;
+// The gutter the scale owns, taken off the plot's width rather than laid over
+// it. The labels used to be overlaid to keep the polyline full-width, and on
+// this panel that was the wrong trade: each label carries an opaque white
+// plate (see label() in ui_theme.cpp), so a number sat in the data punched a
+// hole in the very line it was describing. Narrower data beats obscured data.
+constexpr int kRateScaleWidth = kRateLabelWidth + kRateTickLength +
+                                kRateScaleGap;
+constexpr int kAxisTickWidth = 2;
+constexpr int kAxisTickHeight = 4;
+
+// At most four labelled lines: five was legible but busy on a 400x300
+// reflective panel, and four keeps the step one decade coarser - 0.10 rather
+// than 0.05 on a month of this rate, which is what makes the marks land on
+// 44.50 / 44.60 / 44.70 instead of every half-step between them.
+constexpr int kMaxRateTicks = 4;
+
+// The plot proper: the chart box less the scale's gutter. Everything that
+// carries data - grid, polyline, date labels - is laid out against this, so
+// the line's ends and the dates beneath them stay aligned.
+constexpr Rect rate_plot_rect(const Rect chart) {
+  return {chart.x, chart.y, std::max(1, chart.width - kRateScaleWidth),
+          chart.height};
+}
+
+// The gutter must leave a plot worth drawing into, and must itself stay
+// inside the page's primary column - a label that starts past the column's
+// right edge is not clipped by LVGL, it simply renders over the sidebar.
+// Both are properties of constants that are easy to nudge, so they are proven
+// here rather than eyeballed on the panel.
+static_assert(
+    rate_plot_rect(
+        market_chart_rect(
+            market_layout(content_bounds(safe_canvas(), app_core::PageId::UaFx))
+                .primary,
+            kSetupSmallFontLineHeight))
+            .width >= 120,
+    "the rates scale gutter leaves too little room for the polyline");
+static_assert(
+    rate_plot_rect(
+        market_chart_rect(
+            market_layout(content_bounds(safe_canvas(), app_core::PageId::UaFx))
+                .primary,
+            kSetupSmallFontLineHeight))
+                .right() +
+            kRateTickLength + kRateScaleGap + kRateLabelWidth <=
+        market_chart_rect(
+            market_layout(content_bounds(safe_canvas(), app_core::PageId::UaFx))
+                .primary,
+            kSetupSmallFontLineHeight)
+            .right(),
+    "the rates scale labels overflow the chart box");
+
+// The value axis the chart never had: without it the polyline's height means
+// nothing, because the normalizer rescales every series to fill the box - a
+// flat month and a volatile one draw the same shape.
+//
+// The marks land on round values (44.50, 44.60, ...), not on fractions of the
+// plot. A grid ruled at quarter-heights answers "what is a quarter of the way
+// up this box", which nobody asks; one ruled at round values answers "is it
+// above 44.60", which is the question. Only values that fall inside the
+// measured range get a line, so the grid never implies headroom the data does
+// not have.
+//
+// Interpolating the scale is legitimate in a way an interpolated date is not:
+// a scale is arithmetic on a measured range, whereas a midpoint date would be
+// a day nobody published - which is why the date axis below still gets only
+// its two real endpoints.
+void draw_rate_grid(lv_obj_t* parent, const Rect plot, const MarketRange range,
+                    const int label_height) {
+  // A flat series gets no scale rather than one line labelled with the single
+  // value repeated - and no division by a zero span either.
+  if (range.high <= range.low) return;
+
+  // Hundredths of a hryvnia, the unit intraday_samples is kept in: 1, 2 and 5
+  // of a unit and the same through each decade above it. A month of this rate
+  // spans ~27 of them and picks 10 - a 0.10 step.
+  static constexpr int kCandidates[] = {1, 2, 5, 10, 20, 50, 100, 200, 500,
+                                        1000, 2000, 5000};
+  const int step = scale_step(range.low, range.high, kCandidates,
+                              std::size(kCandidates), kMaxRateTicks);
+
+  const int span = range.high - range.low;
+  for (int value = (range.low + step - 1) / step * step; value <= range.high;
+       value += step) {
+    // The same mapping normalize_chart_samples_n uses: maximum to the top of
+    // the box, minimum to the bottom. If these two ever disagree the labels
+    // stop naming the heights the data is drawn at.
+    const int y = plot.y + ((range.high - value) * plot.height) / span;
+
+    for (int x = plot.x + 1; x < plot.right() - 1; x += 9) {
+      line_segment(parent, x, y, std::min(4, plot.right() - x - 1), 1);
+    }
+    line_segment(parent, plot.right(), y - kAxisTickWidth / 2, kRateTickLength,
+                 kAxisTickWidth);
+
+    // Clamped so a mark at the very top or bottom of the plot keeps its label
+    // inside the chart box instead of riding out over the row above.
+    const int label_y = std::clamp(y - label_height / 2, plot.y,
+                                   plot.bottom() - label_height);
+    char value_text[12];
+    std::snprintf(value_text, sizeof(value_text), "%.2f", value / 100.0);
+    label(parent, value_text,
+          {plot.right() + kRateTickLength + kRateScaleGap, label_y,
+           kRateLabelWidth, label_height},
+          small_font(), LV_TEXT_ALIGN_LEFT);
+  }
+}
+
+// Ticks at the two ends of the time axis, placed outward from the plot so
+// they mark the edges of the span rather than sitting inside the data.
+void draw_span_ticks(lv_obj_t* parent, const Rect chart) {
+  line_segment(parent, chart.x, chart.bottom(), kAxisTickWidth,
+               kAxisTickHeight);
+  line_segment(parent, chart.right() - kAxisTickWidth, chart.bottom(),
+               kAxisTickWidth, kAxisTickHeight);
 }
 
 }  // namespace
@@ -164,26 +294,60 @@ void render_market(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
       //   must not be read as real, zero-valued data.
       const float fraction =
           std::clamp(market.session_elapsed_fraction, 0.0f, 1.0f);
+      // The scale's gutter comes off the plot before anything is laid out, so
+      // the grid, the polyline and the dates below all share one width and
+      // the labels sit beside the data rather than on it.
+      const Rect plot = rate_plot_rect(chart);
       const Rect data_extent{
-          chart.x, chart.y,
-          std::max(1, static_cast<int>(chart.width * fraction)),
-          chart.height};
-      dotted_grid(parent, chart);
+          plot.x, plot.y,
+          std::max(1, static_cast<int>(plot.width * fraction)), plot.height};
+      // Grid first, then the curve over it: the polyline is transparent now
+      // (see its own comment), so this order is what puts the data on top of
+      // its own reference lines rather than under them.
+      draw_rate_grid(parent, plot,
+                     market_intraday_range(market.intraday_samples,
+                                           market.intraday_sample_count),
+                     axis_height);
       polyline(parent,
               normalize_chart_samples_n(market.intraday_samples, data_extent,
                                         market.intraday_sample_count),
               market.intraday_sample_count, data_extent);
-      label(parent, text(Text::ChartOpen),
-            {chart.x, chart.bottom() + 1, chart.width / 3, axis_height},
-            small_font());
-      label(parent, text(Text::ChartMid),
-            {chart.x + chart.width / 3, chart.bottom() + 1, chart.width / 3,
-             axis_height},
-            small_font(), LV_TEXT_ALIGN_CENTER);
-      label(parent, text(Text::ChartClose),
-            {chart.x + 2 * chart.width / 3, chart.bottom() + 1,
-             chart.width / 3, axis_height},
-            small_font(), LV_TEXT_ALIGN_RIGHT);
+      draw_span_ticks(parent, plot);
+      // What the axis is allowed to say depends on what the series is.
+      //
+      // "OPEN / MID / CLOSE" names the phases of one trading session. Under a
+      // month of daily closes it is simply false, so a daily series gets the
+      // span's own first and last dates instead - taken from the rows the
+      // provider returned, never from the device clock, the same rule as the
+      // as-of line above. No middle label: the midpoint of a run of banking
+      // days is not a date anybody published.
+      if (market.series_is_daily) {
+        char from[8];
+        char to[8];
+        std::snprintf(from, sizeof(from), "%02u.%02u",
+                      market.series_first_day, market.series_first_month);
+        std::snprintf(to, sizeof(to), "%02u.%02u", market.series_last_day,
+                      market.series_last_month);
+        label(parent, from, {plot.x, plot.bottom() + 1, plot.width / 3,
+                             axis_height},
+              small_font());
+        label(parent, to,
+              {plot.x + 2 * plot.width / 3, plot.bottom() + 1,
+               plot.width / 3, axis_height},
+              small_font(), LV_TEXT_ALIGN_RIGHT);
+      } else {
+        label(parent, text(Text::ChartOpen),
+              {plot.x, plot.bottom() + 1, plot.width / 3, axis_height},
+              small_font());
+        label(parent, text(Text::ChartMid),
+              {plot.x + plot.width / 3, plot.bottom() + 1, plot.width / 3,
+               axis_height},
+              small_font(), LV_TEXT_ALIGN_CENTER);
+        label(parent, text(Text::ChartClose),
+              {plot.x + 2 * plot.width / 3, plot.bottom() + 1,
+               plot.width / 3, axis_height},
+              small_font(), LV_TEXT_ALIGN_RIGHT);
+      }
     } else {
       // A daily-close-only source (e.g. TWSE) has no intraday series - the
       // figures above are real, but drawing a flat repeat of the close would
