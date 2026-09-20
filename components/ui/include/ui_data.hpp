@@ -41,22 +41,37 @@ inline constexpr char kComfortBandLabel[] = "COMFORT BAND  40-60 RH";
 // Collapses weather_parse.cpp's WMO condition strings (Clear, Mostly Clear,
 // Partly Cloudy, Overcast, Fog, Drizzle/Icy Drizzle, Rain/Icy Rain, Showers,
 // Snow/Snow Grains/Snow Showers, Thunderstorm/Tstorm Hail, Unknown - plus the
-// mock fixture's Sunny/Cloudy/Storm) down to the four silhouettes
-// weather_icon (ui_theme.cpp) can draw boldly enough to read on this panel.
+// mock fixture's Sunny/Cloudy/Storm) onto the seven weather_icon glyphs.
 // Substring matching, not an exhaustive switch, so it also covers whatever
 // exact wording a future WMO code addition uses without a matching update
 // here. Unmatched/empty text is treated as Cloud, the least specific claim.
+//
+// Order is load-bearing, and every test below is placed against the ones
+// above it:
+//   - storm before rain, because a thunderstorm is a rain event and would
+//     otherwise be claimed by the rain test and lose its bolt;
+//   - snow before rain, for "Snow Showers";
+//   - "Mostly" before "Clear", or "Mostly Clear" reads as a cloudless sky;
+//   - "Partly" before the cloud fallback, which is where it used to land.
 inline WeatherIconKind weather_icon_kind_for_condition(
     const std::string& condition) {
+  // "torm" (no leading S/s) is deliberate: it matches "Storm", "Thunderstorm"
+  // and WMO's "Tstorm Hail" regardless of whether the storm syllable happens
+  // to be capitalized in that particular string.
+  if (condition.find("torm") != std::string::npos) {
+    return WeatherIconKind::Thunder;
+  }
   if (condition.find("Snow") != std::string::npos) return WeatherIconKind::Snow;
   if (condition.find("Rain") != std::string::npos ||
       condition.find("Drizzle") != std::string::npos ||
-      condition.find("Shower") != std::string::npos ||
-      // "torm" (no leading S/s) is deliberate: it matches "Storm",
-      // "Thunderstorm" and WMO's "Tstorm Hail" regardless of whether the
-      // storm syllable happens to be capitalized in that particular string.
-      condition.find("torm") != std::string::npos) {
+      condition.find("Shower") != std::string::npos) {
     return WeatherIconKind::Rain;
+  }
+  if (condition.find("Fog") != std::string::npos) return WeatherIconKind::Fog;
+  // Both of these are "sun, but qualified", which is exactly the glyph.
+  if (condition.find("Partly") != std::string::npos ||
+      condition.find("Mostly Clear") != std::string::npos) {
+    return WeatherIconKind::PartlyCloudy;
   }
   if (condition.find("Clear") != std::string::npos ||
       condition.find("Sunny") != std::string::npos) {
@@ -940,6 +955,13 @@ constexpr Rect weather_forecast_rect(const Rect content) {
 
 struct ForecastColumnLayout {
   Rect day;
+  // The day of the month, on its own row under the weekday.
+  //
+  // Not beside it: "Wed 24" measures 55px in montserrat_14 against the 51px a
+  // 53px column leaves after label()'s inset, so a single row would ellipsise
+  // on exactly the dates with the widest glyphs. Stacking also lets the
+  // weekday stay three letters, which is what makes it scannable.
+  Rect date;
   Rect icon;
   Rect condition;
   Rect high;
@@ -957,19 +979,25 @@ struct ForecastColumnLayout {
 inline constexpr int kForecastRowGap = kSetupTightLineGap;
 inline constexpr int kForecastRowHeight =
     safe_text_box_height(18, kSetupSmallFontLineHeight);
-// Slightly wider than tall, which is the shape a cloud and a sun actually
-// are. An earlier pass grew this to 40x60 chasing legibility and got a worse
-// icon rather than a bigger one: at 3:2 portrait the cloud stretched into a
-// tower and the sun's disc had to shrink to leave room for its rays. The
-// silhouettes were redrawn instead (see draw_cloud in ui_theme.cpp), which is
-// what the legibility problem actually needed.
-inline constexpr int kForecastIconWidth = 38;
-inline constexpr int kForecastIconHeight = 30;
+// The icons are glyphs now rather than drawing code, so this rect no longer
+// shapes them - it bounds them, and the largest font whose ink fits inside it
+// is the one weather_icon picks. Both numbers grew when the icons stopped
+// being drawn: the old 38x30 was sized for a hand-drawn silhouette, and at
+// that width the glyph was capped at 19px inside a column 53px wide.
+//
+// 50x34 is what the column has left once every text row is placed - see
+// forecast_column_layout below, which now carries seven rows, and the
+// forecast_column_layout_fits proof that keeps this honest. Widening further
+// would not help: at 50 the binding constraint has moved to the height.
+inline constexpr int kForecastIconWidth = 50;
+inline constexpr int kForecastIconHeight = 34;
 
 constexpr ForecastColumnLayout forecast_column_layout(const Rect column) {
   const Rect day{column.x, column.y, column.width, kForecastRowHeight};
+  const Rect date{column.x, day.bottom() + kForecastRowGap, column.width,
+                  kForecastRowHeight};
   const Rect icon{column.x + (column.width - kForecastIconWidth) / 2,
-                  day.bottom() + kForecastRowGap, kForecastIconWidth,
+                  date.bottom() + kForecastRowGap, kForecastIconWidth,
                   kForecastIconHeight};
   const Rect condition{column.x, icon.bottom() + kForecastRowGap,
                        column.width, kForecastRowHeight};
@@ -979,13 +1007,14 @@ constexpr ForecastColumnLayout forecast_column_layout(const Rect column) {
                  kForecastRowHeight};
   const Rect rain{column.x, low.bottom() + kForecastRowGap, column.width,
                   kForecastRowHeight};
-  return {day, icon, condition, high, low, rain};
+  return {day, date, icon, condition, high, low, rain};
 }
 
 // Every row of a forecast column fits entirely inside that column.
 constexpr bool forecast_column_layout_fits(const Rect column) {
   const ForecastColumnLayout layout = forecast_column_layout(column);
-  return rect_within(column, layout.day) && rect_within(column, layout.icon) &&
+  return rect_within(column, layout.day) &&
+        rect_within(column, layout.date) && rect_within(column, layout.icon) &&
         rect_within(column, layout.condition) &&
         rect_within(column, layout.high) && rect_within(column, layout.low) &&
         rect_within(column, layout.rain);
@@ -994,8 +1023,9 @@ constexpr bool forecast_column_layout_fits(const Rect column) {
 // No two rows within a forecast column overlap.
 constexpr bool forecast_column_layout_disjoint(const Rect column) {
   const ForecastColumnLayout layout = forecast_column_layout(column);
-  const std::array<Rect, 6> rects{layout.day,  layout.icon, layout.condition,
-                                  layout.high, layout.low,  layout.rain};
+  const std::array<Rect, 7> rects{layout.day,  layout.date, layout.icon,
+                                  layout.condition, layout.high, layout.low,
+                                  layout.rain};
   for (std::size_t i = 0; i < rects.size(); ++i) {
     for (std::size_t j = i + 1; j < rects.size(); ++j) {
       if (rects_intersect(rects[i], rects[j])) return false;

@@ -150,6 +150,7 @@ bool parse_forecast_json(const char* json, std::size_t length,
       }
       app_core::WeatherDay& slot = parsed.seven_day[i];
       slot.day = weekday_abbrev(year, month, day);
+      slot.day_number = static_cast<uint8_t>(day);
       slot.condition =
           condition_for_wmo_code(static_cast<int>(code_item->valuedouble));
       slot.high_c = high_item->valuedouble;
