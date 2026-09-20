@@ -52,7 +52,19 @@ struct TileTextLayout {
 // 1-bit, backlight-less panel can actually resolve at a glance - see
 // weather_icon_kind_for_condition in ui_data.hpp for the mapping and
 // weather_icon below for the bold silhouette each one draws.
-enum class WeatherIconKind { Sun, Cloud, Rain, Snow };
+// Seven, matching the distinctions the provider already makes in the text
+// beside the icon. With four, a thunderstorm drew as rain and fog, overcast
+// and partly-cloudy all drew as the same cloud - the picture said less than
+// the caption under it.
+enum class WeatherIconKind {
+  Sun,
+  PartlyCloudy,
+  Cloud,
+  Fog,
+  Rain,
+  Snow,
+  Thunder,
+};
 
 // Which way a sensor series moved on its latest step, and how hard - drawn
 // beside that series' newest value on the indoor page. See
@@ -116,6 +128,20 @@ constexpr Rect tile_content_rect(const Rect cell) {
 inline constexpr int kTileTitleHeight = 24;
 inline constexpr int kTileValueHeight = 34;
 inline constexpr int kTileDetailHeight = 18;
+// The detail row sits this far below the value row rather than directly
+// under it, which is what keeps it clear of the leading visual.
+//
+// The visual spans the value row and then some - it has to, or it is too
+// short to take the large icon face - and the detail row is full width, so
+// the two met: "Partly Cloudy" ran straight across the icon. Indenting the
+// detail past the visual was the other option and does not fit, leaving
+// 108px for a line that needs up to 149.
+//
+// 14px, from the 16px the content block leaves unused at the bottom of a
+// 108px Home tile. The content rect itself is untouched, so the block stays
+// centred and tile_content_is_centered keeps meaning what it says; only this
+// last row reaches into the margin below it, and 2px of that margin is left.
+inline constexpr int kTileDetailDrop = 14;
 constexpr TileTextLayout tile_text_layout(const Rect cell) {
   const Rect content = tile_content_rect(cell);
   return {{cell.x + kTileInset, content.y, cell.width - 2 * kTileInset,
@@ -123,25 +149,57 @@ constexpr TileTextLayout tile_text_layout(const Rect cell) {
           {cell.x + kTileInset, content.y + kTileTitleHeight,
            cell.width - 2 * kTileInset, kTileValueHeight},
           {cell.x + kTileInset,
-           content.y + kTileTitleHeight + kTileValueHeight,
+           content.y + kTileTitleHeight + kTileValueHeight + kTileDetailDrop,
            cell.width - 2 * kTileInset, kTileDetailHeight}};
 }
 
+// The weather/indoor glyph beside the reading, spanning the value and detail
+// rows rather than sitting inside the value row alone.
+//
+// It was 28x28 when the icons were hand-drawn silhouettes and every page had
+// a narrow sidebar of these tiles. Only Home renders them now, and at 60x48
+// the icon takes the large face (ink 55x43, see font_weather_large) instead
+// of the smallest one - the difference between a symbol you read and one you
+// infer from context.
+//
+// The height is the value row plus kTileDetailDrop, so it stops exactly where
+// the detail row begins: tall enough for the large face, and not one pixel
+// into the line below it.
+//
+// 60 wide, not 52: the widest glyph is day-cloudy at 55px of ink, so a square
+// box the height of these two rows would clip a sun behind a cloud.
+inline constexpr int kTileLeadingVisualWidth = 60;
+inline constexpr int kTileLeadingVisualGap = 8;
 constexpr Rect tile_leading_visual_rect(const Rect cell,
                                         const bool visible) {
   const Rect value = tile_text_layout(cell).value;
-  // 4px in from the cell edge, not 8. The sidebar cell is 108px wide and the
-  // icon plus its old gap left only 57px for the value, which is 3px short of
-  // "25.2 C" - measured on the device, not guessed.
-  return visible ? Rect{cell.x + 4, value.y, 28, 28}
+  return visible ? Rect{cell.x + kTileInset, value.y,
+                        kTileLeadingVisualWidth,
+                        kTileValueHeight + kTileDetailDrop}
                  : Rect{value.x, value.y, 0, 0};
+}
+
+// How far the value row starts past the visual. The detail row below it is
+// deliberately not indented - see its own comment in render_shared.cpp.
+constexpr int tile_text_indent(const bool with_leading_visual) {
+  return with_leading_visual
+             ? kTileInset + kTileLeadingVisualWidth + kTileLeadingVisualGap
+             : kTileInset;
 }
 
 constexpr Rect tile_value_rect(const Rect cell, const bool with_leading_visual) {
   const Rect value = tile_text_layout(cell).value;
-  return with_leading_visual
-             ? Rect{cell.x + 36, value.y, cell.width - 40, value.height}
-             : value;
+  const int indent = tile_text_indent(with_leading_visual);
+  return {cell.x + indent, value.y, cell.width - indent - kTileInset,
+          value.height};
+}
+
+constexpr Rect tile_detail_rect(const Rect cell,
+                                const bool with_leading_visual) {
+  const Rect detail = tile_text_layout(cell).detail;
+  const int indent = tile_text_indent(with_leading_visual);
+  return {cell.x + indent, detail.y, cell.width - indent - kTileInset,
+          detail.height};
 }
 
 constexpr bool tile_content_is_centered(const Rect cell) {

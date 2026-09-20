@@ -196,86 +196,121 @@ lv_obj_t* filled_circle(lv_obj_t* parent, int center_x, int center_y,
 // two hard bottom corners are most of what the eye picks up. The lobes are
 // deliberately unequal and off-centre for the same reason: two identical
 // circles side by side read as symmetrical machinery.
-void draw_cloud(lv_obj_t* parent, Rect bounds, bool inverse) {
-  const int base_height = std::max(3, bounds.height * 2 / 5);
-  const int base_y = bounds.bottom() - base_height;
-  lv_obj_t* base =
-      line_segment(parent, bounds.x, base_y, bounds.width, base_height, inverse);
-  if (base != nullptr) lv_obj_set_style_radius(base, LV_RADIUS_CIRCLE, 0);
-  const int big = std::max(3, bounds.height * 7 / 10);
-  const int small = std::max(3, bounds.height * 1 / 2);
-  filled_circle(parent, bounds.x + bounds.width * 38 / 100, base_y + 1, big,
-                inverse);
-  filled_circle(parent, bounds.x + bounds.width * 68 / 100, base_y + 2, small,
-                inverse);
-}
+// The four hand-drawn weather silhouettes that used to live here - sun,
+// cloud, rain, snow - are gone. They were built from axis-aligned rectangles
+// and circles because that is all the widget layer offers, which capped the
+// sun at four rays and gave the cloud a flat bottom edge, and they had to be
+// redrawn at every size they appeared in. weather_icon() now renders a glyph
+// from a 1bpp icon font instead (see font_weather_large in ui_fonts.hpp),
+// which is both better looking and one-seventh the code.
+//
+// filled_circle() below survives them: temperature_icon and the tray still
+// use it.
 
-void draw_sun(lv_obj_t* parent, Rect bounds, bool inverse) {
-  const int center_x = bounds.x + bounds.width / 2;
-  const int center_y = bounds.y + bounds.height / 2;
-  // Only axis-aligned rectangles are available, so the sun gets four rays
-  // rather than the usual eight. That makes the disc carry the recognition:
-  // it is sized generously and the rays read as short stubs around it, which
-  // holds together far better than a small disc with long thin spokes.
-  const int body_diameter =
-      std::max(2, std::min(bounds.width, bounds.height) * 7 / 10);
-  filled_circle(parent, center_x, center_y, body_diameter, inverse);
-  const int ray_width = std::max(2, body_diameter / 5);
-  const int vertical_reach = std::max(0, (bounds.height - body_diameter) / 2);
-  const int horizontal_reach = std::max(0, (bounds.width - body_diameter) / 2);
-  line_segment(parent, center_x - ray_width / 2, bounds.y, ray_width,
-              vertical_reach, inverse);
-  line_segment(parent, center_x - ray_width / 2, center_y + body_diameter / 2,
-              ray_width, vertical_reach, inverse);
-  line_segment(parent, bounds.x, center_y - ray_width / 2, horizontal_reach,
-              ray_width, inverse);
-  line_segment(parent, center_x + body_diameter / 2, center_y - ray_width / 2,
-              horizontal_reach, ray_width, inverse);
-}
 
-void draw_rain(lv_obj_t* parent, Rect bounds, bool inverse) {
-  const int cloud_height = bounds.height * 3 / 5;
-  draw_cloud(parent, {bounds.x, bounds.y, bounds.width, cloud_height}, inverse);
-  const int drop_width = std::max(2, bounds.width / 10);
-  const int drop_y = bounds.y + cloud_height + 2;
-  const int drop_height = std::max(2, bounds.bottom() - drop_y);
-  line_segment(parent, bounds.x + bounds.width * 2 / 10, drop_y, drop_width,
-              drop_height, inverse);
-  line_segment(parent, bounds.x + bounds.width * 5 / 10, drop_y, drop_width,
-              drop_height, inverse);
-  line_segment(parent, bounds.x + bounds.width * 8 / 10 - drop_width, drop_y,
-              drop_width, drop_height, inverse);
-}
+// The glyphs. Weather Icons puts these in the private-use area, so the
+// escapes are the whole story - there is no readable character here to check
+// them against, which is why each is named.
+//
+// \u escapes, not raw byte triples. The byte form was written first and it
+// shipped seven tofu boxes to the panel: this source file is UTF-8, so each
+// intended 0xEF byte was itself re-encoded as 0xC3 0xAF, and what reached
+// LVGL was U+00EF U+0080 U+008D - three characters this font has never heard
+// of. \u names the codepoint and lets the compiler emit the bytes, which is
+// the one step that cannot be got wrong by hand.
+constexpr const char* kWeatherGlyphs[] = {
+    "\uF00D",  // wi-day-sunny
+    "\uF002",  // wi-day-cloudy
+    "\uF041",  // wi-cloud
+    "\uF014",  // wi-fog
+    "\uF019",  // wi-rain
+    "\uF01B",  // wi-snow
+    "\uF01E",  // wi-thunderstorm
+};
+static_assert(std::size(kWeatherGlyphs) ==
+                  static_cast<std::size_t>(WeatherIconKind::Thunder) + 1,
+              "every WeatherIconKind needs a glyph, in enum order");
 
-void draw_snow(lv_obj_t* parent, Rect bounds, bool inverse) {
-  const int cloud_height = bounds.height * 3 / 5;
-  draw_cloud(parent, {bounds.x, bounds.y, bounds.width, cloud_height}, inverse);
-  const int flake_diameter = std::max(2, bounds.width / 8);
-  const int flake_y = bounds.bottom() - flake_diameter;
-  filled_circle(parent, bounds.x + bounds.width * 2 / 10, flake_y,
-               flake_diameter, inverse);
-  filled_circle(parent, bounds.x + bounds.width * 5 / 10, flake_y,
-               flake_diameter, inverse);
-  filled_circle(parent, bounds.x + bounds.width * 8 / 10, flake_y,
-               flake_diameter, inverse);
+// Sized against the box, because a bitmap glyph has exactly one size. The
+// thresholds are the three icon rects in use - 56x58, 50x34 and 28x28 - and
+// picking the next face down when a box is short is the safe direction: an
+// icon a little small is legible, one whose ink exceeds its rect collides
+// with whatever is drawn beside it.
+const lv_font_t* weather_icon_font(int box_height) {
+  // Thresholds are the ink heights themselves (43, 33, 21) rounded up, not
+  // the boxes the icons happen to sit in today: what decides whether a face
+  // fits is its tallest glyph, so a rect one pixel shy of a round number does
+  // not silently drop to a smaller icon.
+  if (box_height >= 44) return font_weather_large();
+  if (box_height >= 34) return font_weather_medium();
+  return font_weather_small();
 }
 
 void weather_icon(lv_obj_t* parent, Rect bounds, WeatherIconKind kind,
                   bool inverse) {
-  switch (kind) {
-    case WeatherIconKind::Sun:
-      draw_sun(parent, bounds, inverse);
-      return;
-    case WeatherIconKind::Rain:
-      draw_rain(parent, bounds, inverse);
-      return;
-    case WeatherIconKind::Snow:
-      draw_snow(parent, bounds, inverse);
-      return;
-    case WeatherIconKind::Cloud:
-    default:
-      draw_cloud(parent, bounds, inverse);
-      return;
+  const auto index = static_cast<std::size_t>(kind);
+  if (index >= std::size(kWeatherGlyphs)) return;
+  const lv_font_t* font = weather_icon_font(bounds.height);
+
+  // Centre on the glyph's ink, not on its line box.
+  //
+  // A text line is ascent + descent tall and the ink sits somewhere inside
+  // it, so centring the label's own box leaves the icon visibly high or low
+  // in its rect - and, worse, made line_height look like the size cap, which
+  // is what held these icons a third smaller than their boxes allow.
+  //
+  // lv_font_get_glyph_dsc gives the ink box and its offsets, which is enough
+  // to place the ink exactly. The first codepoint is the whole string here:
+  // every entry in kWeatherGlyphs is one glyph.
+  uint32_t codepoint = 0;
+  const char* text = kWeatherGlyphs[index];
+  // Three-byte UTF-8, which is what every private-use codepoint in this font
+  // encodes to - asserted at build time by the escapes themselves.
+  if ((static_cast<unsigned char>(text[0]) & 0xF0) == 0xE0) {
+    codepoint = static_cast<uint32_t>(static_cast<unsigned char>(text[0]) & 0x0F) << 12 |
+                static_cast<uint32_t>(static_cast<unsigned char>(text[1]) & 0x3F) << 6 |
+                static_cast<uint32_t>(static_cast<unsigned char>(text[2]) & 0x3F);
+  }
+
+  lv_font_glyph_dsc_t glyph{};
+  const bool measured =
+      codepoint != 0 && lv_font_get_glyph_dsc(font, &glyph, codepoint, 0);
+  // The check that would have caught seven tofu boxes before they reached the
+  // panel. A missing glyph still draws - as a placeholder rectangle - so it
+  // is invisible to every other diagnostic this project has: it is not an
+  // overflow, not a clip, and not an out-of-bounds object.
+  if (!measured || glyph.is_placeholder) {
+    ESP_LOGW("ui_theme", "weather icon U+%04X missing from its font",
+             static_cast<unsigned>(codepoint));
+  }
+
+  lv_obj_t* object = lv_label_create(parent);
+  if (object == nullptr) return;
+  apply_surface(object);
+  // Transparent, unlike every other widget here. An icon is the one thing
+  // that gets drawn onto an inverted tile, and an opaque white plate behind
+  // it would cut a white rectangle out of that tile's black background.
+  lv_obj_set_style_bg_opa(object, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(object, 0, 0);
+  lv_obj_set_style_text_font(object, font, 0);
+  lv_obj_set_style_text_color(object, ink(inverse), 0);
+  lv_obj_set_size(object, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+  lv_label_set_text(object, text);
+
+  if (measured) {
+    // Where the ink starts inside the line box: the baseline sits at
+    // (line_height - base_line) from the top, and ofs_y measures up from the
+    // baseline to the bottom of the bitmap.
+    const int ascent =
+        static_cast<int>(font->line_height) - static_cast<int>(font->base_line);
+    const int ink_top = ascent - (glyph.ofs_y + static_cast<int>(glyph.box_h));
+    const int ink_left = glyph.ofs_x;
+    lv_obj_set_pos(
+        object,
+        bounds.x + (bounds.width - static_cast<int>(glyph.box_w)) / 2 - ink_left,
+        bounds.y + (bounds.height - static_cast<int>(glyph.box_h)) / 2 - ink_top);
+  } else {
+    lv_obj_set_pos(object, bounds.x, bounds.y);
   }
 }
 
@@ -320,7 +355,7 @@ void humidity_icon(lv_obj_t* parent, Rect bounds, bool inverse) {
 namespace {
 
 // An arrowhead, built from stacked rectangles because that is all there is -
-// see draw_sun above for the same constraint. At this size the steps are no
+// the same constraint the weather icons hit before they became a font. At this size the steps are no
 // coarser than the features this panel resolves anyway, where a true
 // diagonal would break into speckle on the way to the glass.
 //

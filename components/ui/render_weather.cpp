@@ -37,9 +37,13 @@ void render_weather(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
   }
 
   const auto& current = weather.current;
-  // Grown from the original 34x31 - too small and too fine to read on this
-  // panel. Still clears the divider at bounds.y+70 with room to spare.
-  weather_icon(parent, {bounds.x + 8, bounds.y + 8, 48, 46},
+  // 56x58, taking the whole column the text leaves free: the condition and
+  // temperature line starts at bounds.x+66, and the divider is at
+  // bounds.y+70, so x+6..x+62 and y+6..y+64 belong to the icon and nothing
+  // else. Grown twice - 34x31, then 48x46 - each time because the icon read
+  // as too fine on this panel, and this is the end of it: the rect is now
+  // the free space rather than a guess inside it.
+  weather_icon(parent, {bounds.x + 6, bounds.y + 6, 56, 58},
               weather_icon_kind_for_condition(current.condition));
   // One line, widened to fit it. Wrapping was the previous answer and it was
   // wrong: at 28px two lines need 56px and the box is 35px, so "Partly Cloudy"
@@ -64,22 +68,44 @@ void render_weather(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
         {bounds.x + 270, bounds.y + 4, bounds.width - 278, 35}, hero_font(),
         LV_TEXT_ALIGN_RIGHT);
 
-  // The city, which until now was an empty label: nothing ever assigned
-  // WeatherCurrent::location. It comes from the geolocation response the
-  // coordinates already came from, and stays empty on the manual-location
-  // path, which never asks anyone what the place is called.
+  // No leading space here any more: the stamp used to be appended straight
+  // onto the measurement row, which needed its own separator. It is now a
+  // field the city line joins with a space of its own.
+  char stamp[12] = "";
+  if (weather.fetched_time_known) {
+    std::snprintf(stamp, sizeof(stamp), "%02u:%02u", weather.fetched_hour,
+                  weather.fetched_minute);
+  }
+
+  // The city and when the reading was fetched: where it came from and when,
+  // on one line, with the row below left for the measurements themselves.
   //
-  // 114px, measured against a real place rather than a short one. 72px was
-  // sized for "Kyiv" (about 32px) and the board answered with the city it
-  // was actually in:
+  // The stamp used to live on that measurement row and could not stay there.
+  // The three fields together need 335px of the 324px the row has, and the
+  // panel had started saying so on an ordinary afternoon rather than at some
+  // extreme:
   //
-  //   clipped: "Chernivtsi" needs 104px, box gives 70px
+  //   clipped: "FEELS 11.4°C RAIN 100% 02:02" needs 205px, box gives 198px
   //
-  // Moving the temperature up to line one is what paid for this - the
-  // sub-row no longer carries it, so the width went to the caption that
-  // needed it.
-  label(parent, current.location.c_str(),
-        {bounds.x + 68, bounds.y + 41, 114, 20}, medium_font());
+  // What paid for the move is this label dropping from medium to small.
+  // "Chernivtsi" measures 104px at medium and 72px at small, and 72 + a space
+  // + "02:02" is 118px - so place and time together now cost less than the
+  // place alone did. The city is context rather than a reading, which is why
+  // it is the one that gives up the size; the temperature beside it went the
+  // other way for the same reason.
+  //
+  // 126px of box against 118px of worst measured text. A longer name than
+  // this city's still ellipsises (LONG_DOT), as it did before at medium.
+  char location_line[48];
+  if (stamp[0] != '\0') {
+    std::snprintf(location_line, sizeof(location_line), "%s %s",
+                  current.location.c_str(), stamp);
+  } else {
+    std::snprintf(location_line, sizeof(location_line), "%s",
+                  current.location.c_str());
+  }
+  label(parent, location_line, {bounds.x + 68, bounds.y + 41, 126, 20},
+        small_font());
 
   // What it feels like, the chance of rain, and when this was fetched - the
   // qualifiers, on the row under the headline they qualify.
@@ -94,32 +120,44 @@ void render_weather(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
   // only, no date: a date needs about 90px this page has nowhere to take
   // from, and `stale` already carries "old enough to distrust".
   char current_line[96];
-  char stamp[12] = "";
-  if (weather.fetched_time_known) {
-    std::snprintf(stamp, sizeof(stamp), "  %02u:%02u", weather.fetched_hour,
-                  weather.fetched_minute);
-  }
   if (current.has_feels_like) {
     std::snprintf(current_line, sizeof(current_line),
-                  "FEELS %s  RAIN %u%%%s%s",
+                  "FEELS %s RAIN %u%%%s",
                   temperature_text(current.feels_like_c, 1).c_str(),
                   current.rain_probability_percent,
-                  weather.stale ? text(Text::StaleSuffix) : "", stamp);
+                  weather.stale ? text(Text::StaleSuffix) : "");
   } else {
-    std::snprintf(current_line, sizeof(current_line), "RAIN %u%%%s%s",
+    std::snprintf(current_line, sizeof(current_line), "RAIN %u%%%s",
                   current.rain_probability_percent,
-                  weather.stale ? text(Text::StaleSuffix) : "", stamp);
+                  weather.stale ? text(Text::StaleSuffix) : "");
   }
-  // The row this lands in:
-  // 192px of text, which takes today's "FEELS 12.8°C  RAIN 3%  01:52" (about
-  // 175px, extrapolated from the 201px the panel measured for a longer
-  // string) with room over. A winter extreme - two negative two-digit
-  // temperatures and a three-digit rain figure - runs about 215px and will
-  // ellipsise, logged. That is the deliberate end of the trade: the city
-  // beside it is a name that must be readable every day, not only on the
-  // coldest one.
+  // The row this lands in, sized from lv_font_montserrat_14's glyph table
+  // rather than extrapolated. The previous comment here put today's string at
+  // "about 175px" and sized the box at 192px on that basis; the panel then
+  // measured a plain summer reading, "FEELS 24.1°C  RAIN 0%  17:36", at
+  // 199px and ellipsised it. An estimate was standing in for a measurement,
+  // which is the one thing this project's layouts are not allowed to do.
+  //
+  // Measured, at single-space separators:
+  //   FEELS 24.1°C RAIN 0% 17:36     191.5px  (an ordinary day)
+  //   FEELS -9.9°C RAIN 100% 04:44   213.2px  (a wet winter one)
+  //
+  // The box gives 198px of text, so ordinary readings now fit with room and
+  // the wet-winter extreme still ellipsises, logged. That remains a
+  // deliberate trade rather than an oversight - the city beside it is a name
+  // that must be readable every day, not only on the mild ones - but it is
+  // now a trade made against measured numbers, and the case it gives up is a
+  // genuine extreme rather than an afternoon in September.
+  //
+  // Width came from two places: the city box dropped from 114 to 108 (it
+  // needs 104 for "Chernivtsi" in medium) and the separators went from two
+  // spaces to one.
+  // 186px of box, against 173px for the widest this row can now hold
+  // ("FEELS -24.1°C RAIN 100%", measured from the glyph table). The stamp's
+  // departure is worth 46px and the city's demotion another 32, so the case
+  // that was ellipsising today now clears by a margin rather than by a pixel.
   label(parent, current_line,
-        {bounds.x + 186, bounds.y + 42, bounds.width - 194, 20}, small_font(),
+        {bounds.x + 198, bounds.y + 42, bounds.width - 202, 20}, small_font(),
         LV_TEXT_ALIGN_RIGHT);
   divider(parent, {bounds.x + 8, bounds.y + 70, bounds.width - 16,
                    kSeparatorWidth});
@@ -132,6 +170,15 @@ void render_weather(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
     const ForecastColumnLayout layout = forecast_column_layout(column);
     label(parent, day.day.c_str(), layout.day, small_font(),
           LV_TEXT_ALIGN_CENTER);
+    // Only when the date actually parsed - see WeatherDay::day_number. An
+    // unparsed slot shows its weekday and nothing under it, rather than a
+    // day "0" that no calendar has.
+    if (day.day_number != 0) {
+      char date[4];
+      std::snprintf(date, sizeof(date), "%u",
+                    static_cast<unsigned>(day.day_number));
+      label(parent, date, layout.date, small_font(), LV_TEXT_ALIGN_CENTER);
+    }
     weather_icon(parent, layout.icon,
                 weather_icon_kind_for_condition(day.condition));
     label(parent, forecast_condition_short(day.condition),

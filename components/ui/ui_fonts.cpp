@@ -4,6 +4,9 @@ LV_FONT_DECLARE(rlcd_cjk_14)
 LV_FONT_DECLARE(rlcd_cjk_20)
 LV_FONT_DECLARE(rlcd_cjk_28)
 LV_FONT_DECLARE(rlcd_digits_128)
+LV_FONT_DECLARE(rlcd_weather_39)
+LV_FONT_DECLARE(rlcd_weather_30)
+LV_FONT_DECLARE(rlcd_weather_19)
 
 namespace ui {
 namespace {
@@ -40,5 +43,12 @@ const lv_font_t* font_large() {
   return g_ready ? &g_large : &lv_font_montserrat_28;
 }
 const lv_font_t* font_hero() { return &rlcd_digits_128; }
+
+// No fallback on any of these and no fonts_init() dependency: each holds
+// exactly seven glyphs in a private-use range nothing else draws from, so
+// there is no script to fall back to and nothing to build at runtime.
+const lv_font_t* font_weather_large() { return &rlcd_weather_39; }
+const lv_font_t* font_weather_medium() { return &rlcd_weather_30; }
+const lv_font_t* font_weather_small() { return &rlcd_weather_19; }
 
 }  // namespace ui

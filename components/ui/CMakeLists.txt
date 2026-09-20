@@ -20,6 +20,9 @@ idf_component_register(
         "fonts/rlcd_cjk_20.c"
         "fonts/rlcd_cjk_28.c"
         "fonts/rlcd_digits_128.c"
+        "fonts/rlcd_weather_39.c"
+        "fonts/rlcd_weather_30.c"
+        "fonts/rlcd_weather_19.c"
     INCLUDE_DIRS
         "include"
     REQUIRES

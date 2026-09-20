@@ -193,6 +193,10 @@ void tile(lv_obj_t* parent, const char* title, const char* value,
   label(parent, valid ? value : text(Text::NoData),
         tile_value_rect(bounds, has_leading_visual), large_font(),
         LV_TEXT_ALIGN_CENTER);
+  // Full width, not indented past the icon like the value above it. The
+  // tile cell is 190px, and holding the detail clear of a 60px visual left
+  // 108px for a line that needs up to 149 - the icon has the value row's
+  // height to itself and does not need the detail row's width as well.
   label(parent, valid ? detail : "", rows.detail, small_font(),
         LV_TEXT_ALIGN_CENTER);
 }
@@ -255,7 +259,10 @@ void reset_context(UiContext& context) {
 void render_home_tile(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
                       HomeTileKind kind, Rect bounds) {
   char value[24] = "";
-  char detail[24] = "";
+  // 24 was enough for a condition word alone. The weather tile now appends
+  // "  FEELS -12C" to it, which is 12 more characters before the condition
+  // has said anything.
+  char detail[48] = "";
   const char* title = text(Text::TileStatus);
   const char* condition = nullptr;
   bool weather = false;
@@ -279,10 +286,30 @@ void render_home_tile(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
       std::snprintf(value, sizeof(value), "%s",
                     temperature_text(snapshot.weather.current.temperature_c, 0)
                         .c_str());
-      std::snprintf(detail, sizeof(detail), "%s%s%s",
-                    snapshot.weather.alert ? text(Text::StatusAlert) : "",
-                    snapshot.weather.current.condition.c_str(),
-                    snapshot.weather.stale ? text(Text::StaleSuffix) : "");
+      // Condition, then what it feels like - the two things the bare number
+      // above does not say. has_feels_like rather than a sentinel, for the
+      // same reason the weather page uses it: a provider that omits the
+      // field must show nothing, and 0.0 C is an ordinary reading.
+      //
+      // "~11°C", not "FEELS 11°C". Measured against the widest condition
+      // wording this can hold, the spelled-out version needs 189px of the
+      // 176px a 190px tile leaves: "Thunderstorm FEELS -12°C" ellipsises,
+      // and an ellipsis here would eat the feels-like figure that is the
+      // whole point of the line. The weather page still spells it out, where
+      // there is room to.
+      if (snapshot.weather.current.has_feels_like) {
+        std::snprintf(detail, sizeof(detail), "%s%s ~%s%s",
+                      snapshot.weather.alert ? text(Text::StatusAlert) : "",
+                      snapshot.weather.current.condition.c_str(),
+                      temperature_text(snapshot.weather.current.feels_like_c, 0)
+                          .c_str(),
+                      snapshot.weather.stale ? text(Text::StaleSuffix) : "");
+      } else {
+        std::snprintf(detail, sizeof(detail), "%s%s%s",
+                      snapshot.weather.alert ? text(Text::StatusAlert) : "",
+                      snapshot.weather.current.condition.c_str(),
+                      snapshot.weather.stale ? text(Text::StaleSuffix) : "");
+      }
       condition = snapshot.weather.current.condition.c_str();
       weather = true;
       break;
