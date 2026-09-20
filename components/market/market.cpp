@@ -97,6 +97,48 @@ bool http_get(const char* url, int max_bytes, std::string& out_body) {
 constexpr char kNbuBaseUrl[] =
     "https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange";
 
+// A different NBU service for the history, because the one above has no
+// history to give: statdirectory/exchange ignores `start`/`end` entirely and
+// answers with the latest day whatever is asked. Verified twice against the
+// live endpoint, once without `valcode` and once with; both returned a single
+// row. NBU_Exchange/exchange_site honours the range and returns one row per
+// calendar day.
+constexpr char kNbuSeriesUrl[] = "https://bank.gov.ua/NBU_Exchange/exchange_site";
+
+// Thirty days of it: 31 points into the chart's 64 slots, and a response of
+// about 5 KB.
+//
+// One row per calendar day, not per banking day - checked against the live
+// service, which answered a 31-day span with 31 rows. NBU carries the last
+// published rate across weekends itself, so the flat Saturday and Sunday on
+// the chart are the provider's own statement about those days rather than
+// anything invented here.
+constexpr int kNbuSeriesDays = 30;
+
+
+// Both of NBU's history requests below are parameterised by a calendar date,
+// which makes them meaningless until the clock is real. This board has no RTC
+// battery, so every power-on starts at the epoch and stays there until SNTP
+// lands - and the monitor task waits only for an IP, which arrives first.
+//
+// Asked for a 1970 range the service does not fail: it answers 200 with an
+// empty array (verified live - six bytes, "[]"). So the series fetch appeared
+// to succeed, parsed to zero points, and the page said NO INTRADAY DATA for a
+// full hour, because today's rates had parsed fine and the task slept its
+// success interval.
+//
+// The floor is 2020-01-01 UTC: far past any plausible epoch-start garbage and
+// far below any date this firmware will really see.
+constexpr std::time_t kCredibleClockFloor = 1577836800;
+
+bool clock_is_credible() {
+  return std::time(nullptr) >= kCredibleClockFloor;
+}
+
+// True when the last refresh left the page missing something it could still
+// get later - see ua_fx_incomplete() in market.hpp.
+bool g_ua_fx_incomplete = false;
+
 }  // namespace
 
 bool refresh_ua_fx() {
@@ -117,6 +159,14 @@ bool refresh_ua_fx() {
   // in UTC: NBU's rate never changes intraday, so being off by the few
   // hours between UTC midnight and Kyiv midnight costs nothing here, and
   // this avoids coupling this component to net_time's TZ state.
+  const bool clock_ready = clock_is_credible();
+  g_ua_fx_incomplete = !clock_ready;
+  if (!clock_ready) {
+    ESP_LOGW(kTag,
+             "clock not yet synced; skipping NBU history (a date range asked "
+             "at the epoch returns an empty array, not an error)");
+  }
+
   const std::time_t yesterday_epoch = std::time(nullptr) - 24 * 60 * 60;
   std::tm yesterday_tm{};
   gmtime_r(&yesterday_epoch, &yesterday_tm);
@@ -128,12 +178,45 @@ bool refresh_ua_fx() {
   std::string yesterday_body;
   app_core::MarketData yesterday;
   const bool have_yesterday =
+      clock_ready &&
       http_get(yesterday_url, kNbuBufferBytes, yesterday_body) &&
       parse_nbu_rates(yesterday_body.data(), yesterday_body.size(), yesterday);
   if (!have_yesterday) {
     ESP_LOGW(kTag,
              "NBU yesterday fetch/parse failed; publishing today's rate "
              "with no change figure");
+  }
+
+  // Thirty days of USD closes for the chart. Failure is not fatal and not
+  // faked: has_intraday stays false, the page says it has no series, and
+  // today's rates - which are real and already parsed - still render.
+  const std::time_t series_start_epoch =
+      std::time(nullptr) - static_cast<std::time_t>(kNbuSeriesDays) * 24 * 60 * 60;
+  std::tm start_tm{};
+  gmtime_r(&series_start_epoch, &start_tm);
+  const std::time_t now_epoch = std::time(nullptr);
+  std::tm end_tm{};
+  gmtime_r(&now_epoch, &end_tm);
+  char series_url[192];
+  std::snprintf(series_url, sizeof(series_url),
+                "%s?start=%04d%02d%02d&end=%04d%02d%02d&valcode=usd"
+                "&sort=exchangedate&order=asc&json",
+                kNbuSeriesUrl, start_tm.tm_year + 1900, start_tm.tm_mon + 1,
+                start_tm.tm_mday, end_tm.tm_year + 1900, end_tm.tm_mon + 1,
+                end_tm.tm_mday);
+  std::string series_body;
+  if (clock_ready && http_get(series_url, kNbuBufferBytes, series_body) &&
+      parse_nbu_daily_series(series_body.data(), series_body.size(), today)) {
+    ESP_LOGI(kTag, "NBU series ok points=%u %02u.%02u-%02u.%02u",
+             static_cast<unsigned>(today.intraday_sample_count),
+             static_cast<unsigned>(today.series_first_day),
+             static_cast<unsigned>(today.series_first_month),
+             static_cast<unsigned>(today.series_last_day),
+             static_cast<unsigned>(today.series_last_month));
+  } else if (clock_ready) {
+    g_ua_fx_incomplete = true;
+    ESP_LOGW(kTag, "NBU series fetch/parse failed (%zu bytes); no chart",
+             series_body.size());
   }
 
   // See has_change's own comment in app_snapshot.hpp: without yesterday's
@@ -223,6 +306,8 @@ bool refresh_us() {
 long long us_session_start() { return g_us.valid ? g_us_session_start : 0; }
 
 app_core::MarketData ua_fx() { return g_ua_fx; }
+
+bool ua_fx_incomplete() { return g_ua_fx_incomplete; }
 app_core::MarketData us() { return g_us; }
 
 }  // namespace market

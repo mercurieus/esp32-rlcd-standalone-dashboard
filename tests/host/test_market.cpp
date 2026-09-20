@@ -68,9 +68,9 @@ HOST_TEST(market_parse_nbu_rates_full_response_is_valid) {
   EXPECT_TRUE(ok);
   EXPECT_TRUE(data.valid);
   EXPECT_TRUE(data.value_has_decimals);
-  EXPECT_EQ(data.primary_label, std::string("USD/UAH"));
+  EXPECT_EQ(data.primary_label, std::string("USD"));
   EXPECT_EQ(data.primary_value, 4455);  // lround(44.5526 * 100)
-  EXPECT_EQ(data.secondary_label, std::string("EUR/UAH"));
+  EXPECT_EQ(data.secondary_label, std::string("EUR"));
   EXPECT_EQ(data.secondary_value, 5168);  // lround(51.6817 * 100)
   EXPECT_EQ(data.as_of_year, 2026);
   EXPECT_EQ(data.as_of_month, 9);

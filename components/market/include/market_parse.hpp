@@ -89,6 +89,25 @@ struct IndexQuote {
 bool parse_nbu_rates(const char* json, std::size_t length,
                      app_core::MarketData& out);
 
+// Fills out.intraday_samples with one close per banking day from NBU's
+// period service (NBU_Exchange/exchange_site), oldest first, and sets
+// series_is_daily plus the span's own first/last dates.
+//
+// A different service from the one parse_nbu_rates() reads, because the
+// statdirectory/exchange endpoint ignores `start`/`end` - verified twice,
+// once without `valcode` and once with, both returning only the latest day.
+//
+// Rates are stored in hundredths, matching value_has_decimals: the chart
+// scales over its own min..max, and a month of NBU movement spans tens of
+// hundredths, which is ample resolution for a polyline.
+//
+// Only rows that carry both a date and a rate are taken. A response with
+// fewer than kMinIntradayPoints usable rows returns false and leaves
+// `out` untouched: the page then says it has no series rather than drawing
+// a shape from one or two points.
+bool parse_nbu_daily_series(const char* json, std::size_t length,
+                            app_core::MarketData& out);
+
 // Smallest number of real raw points that can be drawn as a series -
 // independent of app_core::kIntradaySampleCount, the chart's own *target*
 // resolution: a session with fewer real bars than the target still
