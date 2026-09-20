@@ -177,6 +177,13 @@ struct WeatherCurrent {
 
 struct WeatherDay {
   std::string day;
+  // Day of the month, 1-31, or 0 when this slot carries no parsed date.
+  //
+  // Zero rather than a guess: the weekday name above is derived from the same
+  // ISO date, so if that date did not parse there is no day number to show
+  // either, and printing "0" under a weekday would be a date that does not
+  // exist. The renderer skips the row instead.
+  uint8_t day_number = 0;
   std::string condition;
   double high_c = 0.0;
   double low_c = 0.0;
