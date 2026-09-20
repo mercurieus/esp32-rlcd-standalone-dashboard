@@ -134,6 +134,27 @@ struct MarketData {
   // elsewhere. True (the default) is every existing source, which always
   // has a change figure whenever valid is true.
   bool has_change = true;
+  // True when intraday_samples holds one close per day rather than one bar
+  // per interval of a single session.
+  //
+  // The array and its count are reused as-is: a series of points scaled over
+  // its own min..max draws the same either way. What changes is what the
+  // x-axis means, and therefore what may be written under it - "OPEN / MID /
+  // CLOSE" describes a trading session and would be a plain untruth beneath a
+  // month of daily closes. render_market.cpp writes the series' own first and
+  // last dates there instead.
+  //
+  // False for every source with a real intraday series (the US page), which
+  // keeps its existing behaviour untouched.
+  bool series_is_daily = false;
+  // The span the daily series covers, as its own rows reported it - not as
+  // the device clock guesses. Zero means no series. Same reasoning as
+  // as_of_*: a chart labelled from the device's idea of the date would be
+  // asserting something the data never said.
+  uint8_t series_first_day = 0;
+  uint8_t series_first_month = 0;
+  uint8_t series_last_day = 0;
+  uint8_t series_last_month = 0;
 };
 
 struct WeatherCurrent {

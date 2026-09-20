@@ -3,6 +3,7 @@
 #include "cJSON.h"
 
 #include <cmath>
+#include <cstdio>
 
 namespace market {
 namespace {
@@ -81,6 +82,65 @@ void reduce_to_extremes(const double* raw, std::size_t raw_count,
     out[i] = static_cast<int>(std::lround(best_value));
     previous = best_value;
   }
+}
+
+bool parse_nbu_daily_series(const char* json, std::size_t length,
+                            app_core::MarketData& out) {
+  cJSON* root = cJSON_ParseWithLength(json, length);
+  if (root == nullptr) return false;
+  if (!cJSON_IsArray(root)) {
+    cJSON_Delete(root);
+    return false;
+  }
+
+  // Oldest-first, because that is the direction a chart reads. The request
+  // asks for ascending order, but the array is walked and filled in the
+  // order it arrives rather than trusting the parameter: a service that
+  // quietly changed its default would otherwise draw the month backwards,
+  // which is a mistake nothing downstream could detect.
+  std::array<int, app_core::kIntradaySampleCount> samples{};
+  std::size_t count = 0;
+  unsigned first_day = 0, first_month = 0, last_day = 0, last_month = 0;
+
+  cJSON* row = nullptr;
+  cJSON_ArrayForEach(row, root) {
+    if (count >= samples.size()) break;
+    if (!cJSON_IsObject(row)) continue;
+    cJSON* rate = cJSON_GetObjectItemCaseSensitive(row, "rate");
+    cJSON* date = cJSON_GetObjectItemCaseSensitive(row, "exchangedate");
+    if (!cJSON_IsNumber(rate) || !cJSON_IsString(date) ||
+        date->valuestring == nullptr) {
+      continue;
+    }
+    unsigned day = 0, month = 0, year = 0;
+    if (std::sscanf(date->valuestring, "%u.%u.%u", &day, &month, &year) != 3) {
+      continue;
+    }
+    samples[count] = static_cast<int>(std::lround(rate->valuedouble * 100.0));
+    if (count == 0) {
+      first_day = day;
+      first_month = month;
+    }
+    last_day = day;
+    last_month = month;
+    ++count;
+  }
+  cJSON_Delete(root);
+
+  if (count < kMinIntradayPoints) return false;
+
+  out.intraday_samples = samples;
+  out.intraday_sample_count = static_cast<uint8_t>(count);
+  out.has_intraday = true;
+  out.series_is_daily = true;
+  // Complete by construction: every point in a daily series is a settled
+  // close, so there is no partial session to narrow the polyline for.
+  out.session_elapsed_fraction = 1.0f;
+  out.series_first_day = static_cast<uint8_t>(first_day);
+  out.series_first_month = static_cast<uint8_t>(first_month);
+  out.series_last_day = static_cast<uint8_t>(last_day);
+  out.series_last_month = static_cast<uint8_t>(last_month);
+  return true;
 }
 
 bool parse_nbu_rates(const char* json, std::size_t length,
