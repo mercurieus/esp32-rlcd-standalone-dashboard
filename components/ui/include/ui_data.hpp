@@ -1592,7 +1592,30 @@ inline constexpr int kIndoorTitleWidth = 64;
 // that (a sensor reporting its -40..125 C extremes, which is a room nobody
 // is reading a chart in) LV_LABEL_LONG_DOT ellipsises and logs, which is the
 // designed behaviour rather than silent overprinting.
-inline constexpr int kIndoorScaleWidth = 50;
+// The two scale gutters, each measured from lv_font_montserrat_14's glyph
+// table for the widest value it can ever hold, plus the tick.
+//
+// Neither carries a unit. The header row directly above shows the
+// temperature and the humidity with their units and their swatches, so a
+// degree sign repeated down the axis is 5 px of ink per label restating what
+// the page already said - and here that ink is charged straight to the plot's
+// width. Dropping both units is what brings the two gutters to 72 px
+// together, against the 76 px an earlier attempt at gutters cost before it
+// was rejected from the panel as visibly tightening the chart.
+//
+// Temperature is sized for "-24.4" at 35.4 px: an indoor sensor in an
+// unheated room can read below zero, and the minus sign is the widest thing
+// that can happen to this label. Humidity is sized for "100" at 23.8 px.
+//
+// Each width is the tick (kScaleTickLength) plus the text box, and the text
+// box loses 2 px to label()'s kTextInset on each side before a glyph is
+// drawn. Leaving that out is how a box that looks big enough by a pixel
+// ellipsises on the panel instead:
+//   temperature  4 + 39 = 43, usable 37 against 35.4
+//   humidity     4 + 27 = 31, usable 25 against 23.8
+inline constexpr int kScaleTickLength = 4;
+inline constexpr int kIndoorTemperatureScaleWidth = 43;
+inline constexpr int kIndoorHumidityScaleWidth = 31;
 inline constexpr int kIndoorSwatchWidth = 14;
 inline constexpr int kIndoorMeasureIconWidth = 13;
 inline constexpr int kIndoorTrendIconWidth = 14;
@@ -1629,15 +1652,22 @@ constexpr IndoorLayout indoor_layout(const Rect bounds) {
   const int plot_height = 160;
   const int axis_y = plot_y + plot_height + 3;
 
-  // The scales sit inside the plot, not in gutters beside it. Gutters were
-  // tried and cost 76 px of the 372 available - the chart came back from the
-  // panel as visibly tightened, which is a poor trade for two columns that
-  // are mostly blank. Overlaying them costs nothing horizontal, and
-  // legibility is handled by the labels being opaque: label() applies the
-  // same white surface every widget here gets, so a number knocks a hole in
-  // whatever grid or curve runs behind it instead of tangling with it.
-  const int plot_x = bounds.x + inset;
-  const int plot_width = full_width;
+  // The scales sit in gutters beside the plot, not over it.
+  //
+  // Overlaying them was tried first and is the reason this comment exists.
+  // The labels are opaque - label() gives every widget the same white
+  // surface - so a number did not tangle with the curve behind it, it punched
+  // a hole in it. On a chart whose whole point is two continuous traces, the
+  // scale was erasing the data it described, worst exactly where a curve ran
+  // near its own extreme.
+  //
+  // Gutters cost width, and an earlier attempt at them (76 px) came back from
+  // the panel as visibly tightening the chart. These are narrower: 74 px for
+  // both, bought by measuring each label instead of giving both scales the
+  // same round 50, and by dropping the units the header already carries.
+  const int plot_x = bounds.x + inset + kIndoorTemperatureScaleWidth;
+  const int plot_width =
+      full_width - kIndoorTemperatureScaleWidth - kIndoorHumidityScaleWidth;
 
   return IndoorLayout{
       {bounds.x + inset, bounds.y + 8, kIndoorTitleWidth, row_height},
@@ -1653,9 +1683,8 @@ constexpr IndoorLayout indoor_layout(const Rect bounds) {
       {humidity_trend_x, header_y, kIndoorTrendIconWidth, header_height},
       {bounds.x + inset, bounds.y + 36, full_width, kSeparatorWidth},
       {plot_x, plot_y, plot_width, plot_height},
-      {plot_x, plot_y, kIndoorScaleWidth, plot_height},
-      {plot_x + plot_width - kIndoorScaleWidth, plot_y, kIndoorScaleWidth,
-       plot_height},
+      {bounds.x + inset, plot_y, kIndoorTemperatureScaleWidth, plot_height},
+      {plot_x + plot_width, plot_y, kIndoorHumidityScaleWidth, plot_height},
       {plot_x, axis_y, plot_width, row_height},
   };
 }
@@ -1693,23 +1722,28 @@ static_assert(
                     content_bounds(safe_canvas(), app_core::PageId::Indoor))
                     .scale_right),
     "the humidity scale stays inside the content bounds");
-// The scales overlay the plot by design, so what is worth proving is that
-// they stay within it - a label that escaped the plot would land on the
-// divider above or the hour row below.
+// The scales now flank the plot rather than overlaying it, so what is worth
+// proving flips: each gutter must sit outside the plot and touch it exactly,
+// with no overlap (a label back over the data) and no gap (a tick floating
+// away from the curve it marks).
 static_assert(
-    rect_within(
+    indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .scale_left.right() ==
         indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
-            .plot,
-        indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
-            .scale_left),
-    "the temperature scale stays inside the plot it annotates");
+            .plot.x,
+    "the temperature gutter must meet the plot's left edge exactly");
 static_assert(
-    rect_within(
+    indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .plot.right() ==
         indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
-            .plot,
-        indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
-            .scale_right),
-    "the humidity scale stays inside the plot it annotates");
+            .scale_right.x,
+    "the humidity gutter must meet the plot's right edge exactly");
+// The gutters are only worth their width if what is left still reads as a
+// month of data rather than a sliver.
+static_assert(
+    indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
+            .plot.width >= 240,
+    "the indoor scale gutters leave too little room for the curves");
 static_assert(
     indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
             .scale_left.right() <

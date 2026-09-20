@@ -189,18 +189,6 @@ void draw_series(lv_obj_t* parent, const Rect plot, std::size_t origin,
 // afford to be fine enough to count steps along.
 constexpr int kMaxScaleTicks = 10;
 
-int scale_step(int minimum, int maximum, const int* candidates,
-               std::size_t count) {
-  for (std::size_t i = 0; i < count; ++i) {
-    const int step = candidates[i];
-    // Whole multiples of `step` inside [minimum, maximum], counted the same
-    // way the loop below walks them.
-    const int first = (minimum + step - 1) / step * step;
-    if (first > maximum) return step;
-    if ((maximum - first) / step + 1 <= kMaxScaleTicks) return step;
-  }
-  return candidates[count - 1];
-}
 
 // Where a value sits on its series' own scale.
 int value_y(const Rect strip, const Series& series, int value) {
@@ -268,21 +256,29 @@ void draw_scale(lv_obj_t* parent, const Rect plot, const Rect strip,
   const std::size_t candidate_count =
       temperature ? std::size(kTemperatureSteps) : std::size(kHumiditySteps);
   const int step =
-      scale_step(series.minimum, series.maximum, candidates, candidate_count);
+      scale_step(series.minimum, series.maximum, candidates,
+                 candidate_count, kMaxScaleTicks);
 
   constexpr int kLabelHeight = 16;
-  constexpr int kTickLength = 6;
+  // Shared with the gutter widths in ui_data.hpp, which are the tick plus the
+  // text box: if this and those disagree, the labels silently lose room.
+  constexpr int kTickLength = kScaleTickLength;
   const int text_width = strip.width - kTickLength;
 
   // Label tops already spoken for, and the tick heights that go with them.
-  // Fixed capacity: the two extremes and the average.
-  constexpr std::size_t kMaxLabels = 3;
+  // Capacity: the two extremes, the average, and one per step mark.
+  constexpr std::size_t kMaxLabels = 3 + kMaxScaleTicks;
   std::array<int, kMaxLabels> taken{};
   std::array<int, kMaxLabels> taken_tick{};
   // The value each reserved slot belongs to. Carried rather than re-derived
   // from the slot's position: a reservation can be refused for overlap, so
   // "slot 1 is the minimum" stops being true the moment one is skipped.
   std::array<int, kMaxLabels> taken_value{};
+  // Whether that value is a measurement or a scale reference, which decides
+  // how it prints. A measurement keeps its decimal - rounding a maximum of
+  // 26.4 to 26 would put a figure on the panel the sensor never reported -
+  // while a step mark is an even reference and has no decimal to lose.
+  std::array<bool, kMaxLabels> taken_exact{};
   std::size_t taken_count = 0;
 
   // Which values get a number, decided before anything is drawn so the step
@@ -292,7 +288,7 @@ void draw_scale(lv_obj_t* parent, const Rect plot, const Rect strip,
   // are measurements, and rounding 26.4 to 26 would print a figure the
   // sensor never reported. The step marks are scale references, not
   // readings, so they stay whole.
-  const auto reserve = [&](int value) {
+  const auto reserve = [&](int value, bool exact) {
     if (taken_count >= kMaxLabels) return;
     const int y = value_y(strip, series, value);
     int text_y = y - kLabelHeight / 2;
@@ -308,26 +304,42 @@ void draw_scale(lv_obj_t* parent, const Rect plot, const Rect strip,
     taken[taken_count] = text_y;
     taken_tick[taken_count] = y;
     taken_value[taken_count] = value;
+    taken_exact[taken_count] = exact;
     ++taken_count;
   };
 
   // The extremes say what the curve's whole vertical extent means; the
   // average is the one figure about the window rather than about a moment.
-  reserve(series.maximum);
-  reserve(series.minimum);
-  reserve(series.average);
+  // These are reserved first so that where a measurement and a round step
+  // mark fall within a label of each other, the measured one is the one that
+  // survives - it is the fact, and the step is only a ruler.
+  reserve(series.maximum, true);
+  reserve(series.minimum, true);
+  reserve(series.average, true);
 
-  // Ticks at every whole unit, numbers at almost none.
+  // Then the round values, so a height can be read off the scale directly
+  // instead of interpolated between two extremes tens of pixels apart. Each
+  // is refused if it would overlap a label already placed, so the scale
+  // thins out by itself on a narrow range rather than stacking numbers.
+  const int first_label = (series.minimum + step - 1) / step * step;
+  for (int value = first_label; value <= series.maximum; value += step) {
+    reserve(value, false);
+  }
+
+  // Ticks at every whole unit, including the ones whose number was refused.
   //
-  // A tick is two pixels wide and costs nothing to read; a number is 40 px of
-  // ink competing with the curves behind it. Separating them lets the scale
-  // stay fine-grained - you can count steps to read any height off a curve -
-  // while the page carries only the few figures worth printing.
+  // Most step marks now carry a label (they are reserved above), and those
+  // draw their own tick with the numbers below. This loop is what keeps the
+  // scale fine-grained where the labels had to thin out: on a narrow range
+  // the reservations start colliding and get refused, and without this the
+  // scale would lose the mark as well as the number. A tick is two pixels and
+  // costs nothing to read.
   //
-  // A step mark within kTickMergeDistance of a labelled one is skipped. A
-  // maximum of 25.8 and a whole-degree mark at 26.0 land two pixels apart,
-  // which read as one thick smudged tick rather than two facts; the labelled
-  // height is the measured one, so it is the one that stays.
+  // A step mark within kTickMergeDistance of a labelled one is skipped, which
+  // also stops a labelled step from drawing its tick twice. A maximum of 25.8
+  // and a whole-degree mark at 26.0 land two pixels apart, which read as one
+  // thick smudged tick rather than two facts; the labelled height is the
+  // measured one, so it is the one that stays.
   constexpr int kTickMergeDistance = 4;
   const int mark_x = mirrored ? strip.x + text_width : strip.x;
   const int first = (series.minimum + step - 1) / step * step;
@@ -349,10 +361,17 @@ void draw_scale(lv_obj_t* parent, const Rect plot, const Rect strip,
   for (std::size_t i = 0; i < taken_count; ++i) {
     const int value = taken_value[i];
     char caption[20];
-    if (temperature) {
-      std::snprintf(caption, sizeof(caption), "%.1f°", value / 10.0);
+    // No unit: the header row above carries °C and % beside their swatches,
+    // and repeating either down the axis would cost the plot real width for
+    // ink that says nothing new. See kIndoorTemperatureScaleWidth.
+    if (!temperature) {
+      std::snprintf(caption, sizeof(caption), "%d", value);
+    } else if (taken_exact[i]) {
+      std::snprintf(caption, sizeof(caption), "%.1f", value / 10.0);
     } else {
-      std::snprintf(caption, sizeof(caption), "%d%%", value);
+      // A whole number of degrees, because kTemperatureSteps starts at 10
+      // decidegrees - a step mark never lands between two of them.
+      std::snprintf(caption, sizeof(caption), "%d", value / 10);
     }
     const int text_x = mirrored ? strip.x : strip.x + kTickLength;
     label(parent, caption, {text_x, taken[i], text_width, kLabelHeight},
@@ -570,12 +589,18 @@ void render_indoor(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
   // grid and curves behind it. Drawn per-series instead - scale, then the
   // other curve - the second curve would paint straight back over the first
   // series' numbers.
+  //
+  // `mirrored` is about which edge of the gutter the ticks live on, and both
+  // flags flipped when the scales moved out of the plot: a tick has to touch
+  // the data it marks, so the left gutter's ticks sit on its right edge and
+  // the right gutter's on its left. Overlaid, it was the other way round.
   if (draw_temperature) {
     draw_scale(parent, layout.plot, layout.scale_left, temperature, true,
-               false);
+               true);
   }
   if (draw_humidity) {
-    draw_scale(parent, layout.plot, layout.scale_right, humidity, false, true);
+    draw_scale(parent, layout.plot, layout.scale_right, humidity, false,
+               false);
   }
 
   // No end labels here any more: draw_hour_rules above writes the whole
