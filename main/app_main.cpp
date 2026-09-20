@@ -834,6 +834,53 @@ constexpr int kCableStepMillivolts = 50;
 constexpr int kCableHoldTicks = app_core::kChargingSlopeWindow;
 int g_previous_tick_mv = 0;
 bool g_previous_tick_valid = false;
+// Held whenever the board is on external power, which keeps automatic light
+// sleep - and with it the USB Serial/JTAG peripheral - from powering down.
+//
+// This is the answer to "flashing fails about half the time". Nothing was
+// crashing: with CONFIG_PM_ENABLE the chip light-sleeps whenever it is idle,
+// light sleep suspends USB Serial/JTAG, and a suspended peripheral detaches
+// the device from the host entirely. esptool then reports "No serial data
+// received" because there is no longer a device on the other end - the board
+// is fine, it is simply not there. The same thing truncated every serial
+// capture in this session after a few tens of seconds.
+//
+// CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION exists for this and is set, but it
+// holds its lock only while SOF packets keep arriving. Windows
+// selective-suspends a port no application has open, the SOFs stop, the lock
+// drops and the board sleeps - so the board was reachable only in the window
+// right after something else had held the port. Driving the lock from the
+// board's own power state instead does not depend on the host's behaviour at
+// all.
+//
+// Cost and its bound: this board has no charge-detect line (the CHG pin is an
+// LED only and the charger's STAT output reaches no GPIO), so "on external
+// power" is inferred from voltage and cannot tell a USB host from a wall
+// charger. That distinction does not matter here - either way the board is
+// not running off the cell, and staying awake costs nothing worth saving. The
+// case that does cost is a full cell just unplugged, which reads like a
+// charger until it decays below the threshold: measured at -40 mV/h, up to an
+// hour. In practice the cable-step detector above catches the unplug edge
+// within one 5 s sample and clears this immediately; the decay only matters
+// if that edge is missed.
+esp_pm_lock_handle_t g_external_power_lock = nullptr;
+bool g_holding_external_power_lock = false;
+
+void set_external_power_lock(bool wanted) {
+  if (g_external_power_lock == nullptr) return;
+  if (wanted == g_holding_external_power_lock) return;
+  const esp_err_t err = wanted ? esp_pm_lock_acquire(g_external_power_lock)
+                               : esp_pm_lock_release(g_external_power_lock);
+  if (err != ESP_OK) {
+    ESP_LOGW(kTag, "power: external-power sleep lock %s failed: %s",
+             wanted ? "acquire" : "release", esp_err_to_name(err));
+    return;
+  }
+  g_holding_external_power_lock = wanted;
+  ESP_LOGI(kTag, "power: light sleep %s (external power %s)",
+           wanted ? "held off" : "allowed", wanted ? "present" : "gone");
+}
+
 bool g_cable_step_charging = false;
 int g_cable_hold_ticks = 0;
 
@@ -1015,6 +1062,9 @@ int g_charge_offset_mv = 0;
         battery.direction_known = direction_known || g_cable_hold_ticks > 0;
         battery.charging =
             g_cable_hold_ticks > 0 ? g_cable_step_charging : measured;
+        // Same signal the icon uses - see set_external_power_lock above for
+        // why the USB port's availability is tied to it.
+        set_external_power_lock(battery.charging);
         // Logged here rather than beside the raw reading above, because that
         // log runs before this assignment - a first attempt printed the
         // default-constructed false for every sample and read as "the fix
@@ -1523,6 +1573,26 @@ extern "C" void app_main() {
   pm_config.min_freq_mhz = CONFIG_XTAL_FREQ;
   pm_config.light_sleep_enable = true;
   const esp_err_t pm_result = esp_pm_configure(&pm_config);
+  // Created whether or not the configure call succeeded: if light sleep is
+  // off the lock is simply never contended, and creating it unconditionally
+  // keeps the battery task's call site free of a second failure mode.
+  const esp_err_t lock_result = esp_pm_lock_create(
+      ESP_PM_NO_LIGHT_SLEEP, 0, "external_power", &g_external_power_lock);
+  if (lock_result != ESP_OK) {
+    g_external_power_lock = nullptr;
+    ESP_LOGW(kTag,
+             "power: no external-power sleep lock (%s); the USB port will "
+             "disappear when the board idles, as it did before",
+             esp_err_to_name(lock_result));
+  } else {
+    // Taken at boot rather than waiting for the first battery decision to
+    // take it. That decision runs on the 30 s publish cadence, so a board
+    // that idles early would sleep - and drop its USB port - inside the very
+    // window someone is most likely to be trying to flash it. The first
+    // battery reading releases this again if the board is on the cell, so
+    // the cost of being wrong is at most one cadence of missed sleep.
+    set_external_power_lock(true);
+  }
   if (pm_result == ESP_OK) {
     ESP_LOGI(kTag, "power: DFS %d-%d MHz, automatic light sleep enabled",
              pm_config.min_freq_mhz, pm_config.max_freq_mhz);
