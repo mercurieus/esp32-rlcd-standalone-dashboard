@@ -1671,8 +1671,13 @@ extern "C" void app_main() {
   }
 
   // Depends on the esp_netif/event-loop init wifi_provision::start() just
-  // performed. Safe to call before the station has an IP - SNTP just queues
-  // requests until Wi-Fi comes up.
+  // performed - it registers a got-IP handler as well as starting SNTP.
+  //
+  // Safe to call before the station has an IP, but *not* because SNTP queues
+  // requests until Wi-Fi comes up: it does not, and the comment here used to
+  // say it did. It fires immediately, fails DNS, and backs off for 30 s. What
+  // makes this safe is the got-IP handler net_time::start() installs - see the
+  // comment on on_got_ip() in net_time.cpp.
   result = net_time::start();
   if (result != ESP_OK) {
     // Non-fatal: the clock keeps showing the RTC/compile-time fallback.
