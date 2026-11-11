@@ -89,6 +89,34 @@ HOST_TEST(minute_formatter_keeps_only_hours_and_minutes) {
   EXPECT_EQ(ui::format_minute_clock("unknown"), std::string("unknown"));
 }
 
+HOST_TEST(short_date_drops_the_comma_and_the_year) {
+  EXPECT_EQ(ui::short_date("Wed, 04 May 2026"), std::string("Wed 04 May"));
+  EXPECT_EQ(ui::short_date("Sun, 16 Aug 2026"), std::string("Sun 16 Aug"));
+  EXPECT_EQ(ui::short_date("unknown"), std::string("unknown"));
+  EXPECT_EQ(ui::short_date(""), std::string(""));
+}
+
+HOST_TEST(clock_blinks_only_while_unset) {
+  EXPECT_TRUE(ui::clock_is_set("SNTP"));
+  EXPECT_TRUE(ui::clock_is_set("PCF85063"));
+  EXPECT_TRUE(!ui::clock_is_set("RTC fallback"));
+  EXPECT_TRUE(!ui::clock_is_set("Clock Hero"));
+  // Set: always visible. Unset: on for the first half second, off for the next.
+  EXPECT_TRUE(ui::clock_blink_visible("SNTP", 700));
+  EXPECT_TRUE(ui::clock_blink_visible("RTC fallback", 0));
+  EXPECT_TRUE(ui::clock_blink_visible("RTC fallback", 499));
+  EXPECT_TRUE(!ui::clock_blink_visible("RTC fallback", 500));
+  EXPECT_TRUE(!ui::clock_blink_visible("RTC fallback", 999));
+  EXPECT_TRUE(ui::clock_blink_visible("RTC fallback", 1000));
+}
+
+HOST_TEST(clock_blink_text_hides_digits_but_keeps_the_colon) {
+  EXPECT_EQ(ui::clock_blink_text("09:41", true), std::string("09:41"));
+  EXPECT_EQ(ui::clock_blink_text("09:41", false),
+            std::string("#ffffff 09#:#ffffff 41#"));
+  EXPECT_EQ(ui::clock_blink_text("--", false), std::string("#ffffff --#"));
+}
+
 HOST_TEST(trend_step_text_is_the_unsigned_size_of_a_real_move) {
   // Below the move threshold the arrow says Steady, so no number.
   EXPECT_EQ(ui::trend_step_text(1, ui::kTemperatureTrend, true), std::string(""));

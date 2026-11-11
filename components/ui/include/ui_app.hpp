@@ -86,6 +86,16 @@ struct UiContext {
   bool volume_overlay_visible = false;
 
   lv_obj_t* clock_label = nullptr;
+  // The date the tray shows: Home's full date, or the short one beside the
+  // time elsewhere. Held only so it can blink while the clock is unset.
+  lv_obj_t* date_label = nullptr;
+  // Blink state for update_clock_blink. The applied_* pointers are which
+  // widgets the current phase was last pushed to, so a page swap (fresh
+  // widgets, plain text) gets the phase re-applied even mid-phase. Compared,
+  // never dereferenced.
+  bool clock_blink_visible = true;
+  const lv_obj_t* blink_applied_clock_label = nullptr;
+  const lv_obj_t* blink_applied_date_label = nullptr;
   // The tray indicators are shapes now, not labels, so what the cheap update
   // path needs is their mutable parts rather than a text pointer.
   WifiIconParts network_icon{};
@@ -102,6 +112,7 @@ struct UiContext {
   lv_obj_t* setup_status_label = nullptr;
   // Staging-only registrations used during atomic replacement.
   lv_obj_t* staging_clock_label = nullptr;
+  lv_obj_t* staging_date_label = nullptr;
 
   lv_obj_t* staging_setup_status_label = nullptr;
   bool initialized = false;
@@ -213,6 +224,12 @@ bool update_visible_fields(UiContext& context,
 // function's own comment in render_shared.cpp for the hardware failure that
 // is exactly what happened.
 bool update_tray_indicators(UiContext& context);
+
+// Flashes the clock digits and the date while the clock is unset; see
+// clock_is_set in ui_data.hpp. Call every tick.
+void update_clock_blink(UiContext& context,
+                        const app_core::AppSnapshot& snapshot,
+                        uint64_t now_ms);
 
 lv_obj_t* navigation_overlay(UiContext& context, Rect bounds);
 

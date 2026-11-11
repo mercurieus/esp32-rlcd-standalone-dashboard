@@ -67,11 +67,13 @@ void context_host_deleted(lv_event_t* event) {
   context->host = nullptr;
   context->root = nullptr;
   context->clock_label = nullptr;
+  context->date_label = nullptr;
   context->network_icon = {};
   context->battery_icon_parts = {};
   clear_tray_indicator_icons(context->tray_indicator_icons);
   context->setup_status_label = nullptr;
   context->staging_clock_label = nullptr;
+  context->staging_date_label = nullptr;
   context->staging_network_icon = {};
   context->staging_battery_icon = {};
   clear_tray_indicator_icons(context->staging_tray_indicator_icons);
@@ -209,11 +211,13 @@ bool init_context(UiContext& context, lv_obj_t* host) {
   context.host = host;
   context.root = nullptr;
   context.clock_label = nullptr;
+  context.date_label = nullptr;
   context.network_icon = {};
   context.battery_icon_parts = {};
   clear_tray_indicator_icons(context.tray_indicator_icons);
   context.setup_status_label = nullptr;
   context.staging_clock_label = nullptr;
+  context.staging_date_label = nullptr;
   context.staging_network_icon = {};
   context.staging_battery_icon = {};
   clear_tray_indicator_icons(context.staging_tray_indicator_icons);
@@ -230,6 +234,7 @@ void reset_context(UiContext& context) {
   }
   if (context.root != nullptr) {
     context.clock_label = nullptr;
+    context.date_label = nullptr;
     context.network_icon = {};
     context.battery_icon_parts = {};
     clear_tray_indicator_icons(context.tray_indicator_icons);
@@ -239,11 +244,13 @@ void reset_context(UiContext& context) {
   context.host = nullptr;
   context.root = nullptr;
   context.clock_label = nullptr;
+  context.date_label = nullptr;
   context.network_icon = {};
   context.battery_icon_parts = {};
   clear_tray_indicator_icons(context.tray_indicator_icons);
   context.setup_status_label = nullptr;
   context.staging_clock_label = nullptr;
+  context.staging_date_label = nullptr;
   context.staging_network_icon = {};
   context.staging_battery_icon = {};
   clear_tray_indicator_icons(context.staging_tray_indicator_icons);
@@ -466,6 +473,17 @@ void render_tray(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
       label(parent, leading.c_str(), cells.time, medium_font(),
             LV_TEXT_ALIGN_LEFT);
   if (context != nullptr && !home) context->staging_clock_label = clock_label;
+  // Home's leading label IS its date.
+  if (context != nullptr && home) context->staging_date_label = clock_label;
+  // Every other page carries a short date beside the time. Like Home's full
+  // date it is not on the minute repaint path; the page's next rebuild picks
+  // up a new day. Registered only so it can blink while the clock is unset.
+  if (cells.date.width > 0) {
+    lv_obj_t* date_label =
+        label(parent, short_date(snapshot.clock.date).c_str(), cells.date,
+              medium_font(), LV_TEXT_ALIGN_LEFT);
+    if (context != nullptr) context->staging_date_label = date_label;
+  }
 
   // Shapes, not words. "WIFI"/"NO WIFI"/"BAT 91%" spent most of the tray on
   // two facts a glance can carry, and the exact charge figure now lives on the
@@ -539,6 +557,7 @@ lv_obj_t* render_page(UiContext& context,
 
   const Rect local_bounds{0, 0, bounds.width, bounds.height};
   context.staging_clock_label = nullptr;
+  context.staging_date_label = nullptr;
   context.staging_network_icon = {};
   context.staging_battery_icon = {};
   clear_tray_indicator_icons(context.staging_tray_indicator_icons);
@@ -626,6 +645,7 @@ lv_obj_t* render_page(UiContext& context,
   lv_obj_delete(staging_screen);
   if (context.root != nullptr && context.root != replacement) {
     context.clock_label = nullptr;
+    context.date_label = nullptr;
     context.network_icon = {};
     context.battery_icon_parts = {};
     clear_tray_indicator_icons(context.tray_indicator_icons);
@@ -634,6 +654,7 @@ lv_obj_t* render_page(UiContext& context,
   }
   context.root = replacement;
   context.clock_label = context.staging_clock_label;
+  context.date_label = context.staging_date_label;
   context.network_icon = context.staging_network_icon;
   context.battery_icon_parts = context.staging_battery_icon;
   for (int i = 0; i < app_core::kMaxTrayIndicators; ++i) {
@@ -641,6 +662,7 @@ lv_obj_t* render_page(UiContext& context,
   }
   context.setup_status_label = context.staging_setup_status_label;
   context.staging_clock_label = nullptr;
+  context.staging_date_label = nullptr;
   context.staging_network_icon = {};
   context.staging_battery_icon = {};
   clear_tray_indicator_icons(context.staging_tray_indicator_icons);
@@ -659,9 +681,45 @@ lv_obj_t* render_page(UiContext& context,
 bool update_visible_clock(UiContext& context,
                           const app_core::AppSnapshot& snapshot) {
   if (!context_ready(context) || context.clock_label == nullptr) return false;
-  set_label_text_if_changed(context.clock_label,
-                            format_minute_clock(snapshot.clock.hero).c_str());
+  set_label_text_if_changed(
+      context.clock_label,
+      clock_blink_text(format_minute_clock(snapshot.clock.hero),
+                       context.clock_blink_visible)
+          .c_str());
   return true;
+}
+
+// Called every tick. While the clock is unset the digits (not the colon)
+// and the date flash at 1 Hz; once it is set this settles them visible and
+// then costs two compares per tick. Only a phase change touches a widget, so
+// the panel repaints twice a second while blinking and never otherwise.
+void update_clock_blink(UiContext& context,
+                        const app_core::AppSnapshot& snapshot,
+                        const uint64_t now_ms) {
+  if (!context_ready(context)) return;
+  const bool visible = clock_blink_visible(snapshot.clock.source, now_ms);
+  if (context.clock_label != nullptr &&
+      !lv_label_get_recolor(context.clock_label)) {
+    lv_label_set_recolor(context.clock_label, true);
+  }
+  // A freshly rendered page starts with plain text and the date shown, so
+  // re-apply on any page swap as well as on a phase change.
+  if (visible == context.clock_blink_visible &&
+      context.clock_label == context.blink_applied_clock_label &&
+      context.date_label == context.blink_applied_date_label) {
+    return;
+  }
+  context.clock_blink_visible = visible;
+  context.blink_applied_clock_label = context.clock_label;
+  context.blink_applied_date_label = context.date_label;
+  (void)update_visible_clock(context, snapshot);
+  if (context.date_label != nullptr) {
+    if (visible) {
+      lv_obj_clear_flag(context.date_label, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(context.date_label, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
 }
 
 // Separate from update_visible_fields below, and called unconditionally on

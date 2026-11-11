@@ -462,6 +462,9 @@ struct SystemTrayLayout {
   Rect time;
   Rect network;
   Rect battery;
+  // The short date beside the time on every page but Home (whose leading
+  // cell is already the full date). Zero-size on Home - check width first.
+  Rect date;
   // Parallel to TrayIndicators.entries below and to
   // app_core::kMaxTrayIndicators registry slots. indicators[i] is zero-size
   // (width 0) unless entries[i] was active and it fit - see
@@ -516,6 +519,14 @@ inline constexpr int kSystemTrayTimeWidth = 60;
 // formatter produces, since every weekday and month abbreviation is three
 // characters and the day is zero-padded.
 inline constexpr int kSystemTrayDateWidth = 176;
+// The short date ("Wed 04 May") every other page shows beside the time.
+// Measured from lv_font_montserrat_20's glyph table over every weekday, day
+// and month: the widest is "Wed 04 May" at 128.1 px, plus label()'s 1 px
+// inset each side. 134 also has to leave room for every tray indicator slot:
+// time 60 + gap 6 + 134 = 200, and four 20 px indicators left of the network
+// icon need the leading group to end by 210 on the 388 px safe canvas.
+inline constexpr int kSystemTrayShortDateWidth = 134;
+inline constexpr int kSystemTrayShortDateGap = 6;
 inline constexpr int kSystemTrayTimeHeight = 25;
 inline constexpr int kSystemTrayCellY = 3;
 inline constexpr int kSystemTrayCellHeight = 18;
@@ -574,7 +585,14 @@ constexpr SystemTrayLayout system_tray_layout(const Rect bounds,
       battery.x - kTrayIconGap - app_core::kTrayIconSize, tray_icon_y,
       app_core::kTrayIconSize, app_core::kTrayIconSize};
 
-  SystemTrayLayout layout{time, network, battery, {}};
+  const Rect date =
+      wide_leading
+          ? Rect{}
+          : Rect{time.right() + kSystemTrayShortDateGap, bounds.y,
+                 kSystemTrayShortDateWidth, kSystemTrayTimeHeight};
+  const int leading_right = wide_leading ? time.right() : date.right();
+
+  SystemTrayLayout layout{time, network, battery, date, {}};
   int next_right_edge = network.x - kTrayIconGap;
   for (int i = 0; i < app_core::kMaxTrayIndicators; ++i) {
     const TrayIndicators::Entry& entry = indicators.entries[i];
@@ -585,7 +603,7 @@ constexpr SystemTrayLayout system_tray_layout(const Rect bounds,
     // stays the zero Rect it was initialised to, and next_right_edge does
     // not move, so a later (lower-priority) slot gets exactly the same
     // chance at the same space rather than being pushed further left still.
-    if (candidate_x < time.right() + kTrayIconGap) continue;
+    if (candidate_x < leading_right + kTrayIconGap) continue;
     layout.indicators[i] = {candidate_x, tray_icon_y, entry.width,
                             app_core::kTrayIconSize};
     next_right_edge = candidate_x - kTrayIconGap;
@@ -865,6 +883,14 @@ constexpr PageDotsGeometry page_dots_geometry(const Rect bounds,
           bounds.y + bounds.height - kPageDotSize};
 }
 
+// "Wed, 04 May 2026" -> "Wed 04 May": the tray's short date, cut from the
+// one date string the clock already publishes so the two cannot disagree.
+// Anything not in that shape comes back unchanged rather than mangled.
+inline std::string short_date(const std::string& date) {
+  if (date.size() < 11 || date[3] != ',' || date[4] != ' ') return date;
+  return date.substr(0, 3) + date.substr(4, 7);
+}
+
 inline std::string format_minute_clock(std::string clock) {
   const std::size_t first = clock.find(':');
   if (first != std::string::npos) {
@@ -891,6 +917,36 @@ inline Text clock_warning_text(const std::string& source) {
   if (source == "SNTP") return Text::Count;  // nothing to say
   if (source == "PCF85063") return Text::ClockFromRtc;
   return Text::ClockNotSynced;
+}
+
+// Whether the shown time is a real one. Network time and a valid RTC read
+// are; the compile-time fallback (and the mock snapshot's "09:41" before
+// the first clock update) are not, and the clock blinks until one lands -
+// the way a retro digital clock flashes 12:00 after a power cut.
+inline bool clock_is_set(const std::string& source) {
+  return source == "SNTP" || source == "PCF85063";
+}
+
+// One blink cycle is 1 s: digits on for the first half, off for the second.
+inline constexpr uint64_t kClockBlinkHalfPeriodMs = 500;
+
+inline bool clock_blink_visible(const std::string& source,
+                                const uint64_t now_ms) {
+  return clock_is_set(source) ||
+         (now_ms / kClockBlinkHalfPeriodMs) % 2 == 0;
+}
+
+// "09:41" with the digits recoloured white (invisible on the 1-bit panel's
+// white surface) and the colon left black. Recolouring rather than removing
+// the digits keeps every glyph's advance, so the colon never shifts - the
+// label needs lv_label_set_recolor. Anything not shaped HH:MM blinks whole.
+inline std::string clock_blink_text(const std::string& hhmm,
+                                    const bool visible) {
+  if (visible) return hhmm;
+  const std::size_t colon = hhmm.find(':');
+  if (colon == std::string::npos) return "#ffffff " + hhmm + "#";
+  return "#ffffff " + hhmm.substr(0, colon) + "#:#ffffff " +
+         hhmm.substr(colon + 1) + "#";
 }
 
 // Retained for the tray and for logs, where naming the source is still the

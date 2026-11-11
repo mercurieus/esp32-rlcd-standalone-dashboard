@@ -59,6 +59,16 @@ HOST_TEST(tray_layout_all_combinations_are_valid) {
       EXPECT_TRUE(ui::rect_within(bounds, cells.time));
       EXPECT_TRUE(ui::rect_within(bounds, cells.network));
       EXPECT_TRUE(ui::rect_within(bounds, cells.battery));
+      // Home's leading cell is the full date; every other page adds a short
+      // one beside the time, which must clear the icons too.
+      if (page == app_core::PageId::Home) {
+        EXPECT_EQ(cells.date.width, 0);
+      } else {
+        EXPECT_TRUE(cells.date.width > 0);
+        EXPECT_TRUE(ui::rect_within(bounds, cells.date));
+        EXPECT_TRUE(!ui::rects_intersect(cells.date, cells.time));
+        EXPECT_TRUE(!ui::rects_intersect(cells.date, cells.network));
+      }
       if (indicator_present) {
         EXPECT_TRUE(ui::rect_within(bounds, indicator));
       } else {
@@ -157,6 +167,7 @@ HOST_TEST(tray_layout_places_every_active_indicator_when_all_fit) {
       EXPECT_TRUE(cells.indicators[i].width > 0);
       EXPECT_TRUE(ui::rect_within(bounds, cells.indicators[i]));
       EXPECT_TRUE(!ui::rects_intersect(cells.indicators[i], cells.time));
+      EXPECT_TRUE(!ui::rects_intersect(cells.indicators[i], cells.date));
       EXPECT_TRUE(!ui::rects_intersect(cells.indicators[i], cells.network));
       EXPECT_TRUE(!ui::rects_intersect(cells.indicators[i], cells.battery));
       for (int j = 0; j < i; ++j) {
@@ -175,10 +186,12 @@ HOST_TEST(tray_layout_places_every_active_indicator_when_all_fit) {
 // With several indicators active but not enough room for all of them, the
 // lower-index (higher-priority) ones win and the rest are dropped, rather
 // than shrinking everyone or overlapping the leading cell. This deliberately
-// crowded 160px tray fits the first requested indicator but not the second,
-// proving the lower-priority slot drops rather than both crowding in.
+// crowded 300px tray fits the first requested indicator but not the second,
+// proving the lower-priority slot drops rather than both crowding in. (It
+// was 160px before Weather's tray gained the short date beside the time,
+// which moves the leading group's right edge to 200.)
 HOST_TEST(tray_layout_drops_lowest_priority_indicators_first_when_crowded) {
-  const ui::Rect bounds{0, 0, 160, ui::kSystemTrayHeight};
+  const ui::Rect bounds{0, 0, 300, ui::kSystemTrayHeight};
   const ui::SystemTrayLayout cells = ui::system_tray_layout(
       bounds, app_core::PageId::Weather, n_active(2, app_core::kTrayIconSize));
 
@@ -186,6 +199,7 @@ HOST_TEST(tray_layout_drops_lowest_priority_indicators_first_when_crowded) {
   EXPECT_EQ(cells.indicators[1].width, 0);
   EXPECT_TRUE(ui::rect_within(bounds, cells.indicators[0]));
   EXPECT_TRUE(!ui::rects_intersect(cells.indicators[0], cells.time));
+  EXPECT_TRUE(!ui::rects_intersect(cells.indicators[0], cells.date));
   EXPECT_TRUE(!ui::rects_intersect(cells.indicators[0], cells.network));
 }
 
