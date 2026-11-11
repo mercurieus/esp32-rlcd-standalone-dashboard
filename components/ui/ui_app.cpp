@@ -840,6 +840,7 @@ void timer_callback(lv_timer_t* timer) {
   // comment in render_shared.cpp for the hardware failure this fixes.
   if (runtime->initialized) {
     (void)update_tray_indicators(runtime->context);
+    update_clock_blink(runtime->context, runtime->snapshot, now_ms);
   }
 }
 
