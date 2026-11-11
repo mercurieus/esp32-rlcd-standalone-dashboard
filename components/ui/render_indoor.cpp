@@ -140,14 +140,18 @@ void draw_solid_run(lv_obj_t* parent, const Rect plot,
 
 // How the two curves are told apart on a panel with no colour and no grey.
 //
-// By stroke weight: temperature 4 px, humidity 2 px, each one lv_line.
+// By stroke weight: temperature 2 px, humidity 1 px, each one lv_line.
+// 4 px / 2 px was tried first and read as too heavy against the rest of the
+// page. A 1 px curve was expected to speckle on diagonals, but on the board
+// it shows, and so do the 1 px hour rules now that draw_solid_run no longer
+// paints over them.
 //
 // 2 px is fine, and the three rounds spent insisting otherwise were chasing
 // the wrong cause - see draw_solid_run above, where an opaque background on
 // a plot-sized object was erasing whichever curve had been drawn first. With
 // that fixed a thin stroke is simply a thin stroke.
-constexpr int kTemperatureLineWidth = 4;
-constexpr int kHumidityLineWidth = 2;
+constexpr int kTemperatureLineWidth = 2;
+constexpr int kHumidityLineWidth = 1;
 
 void draw_lone_point(lv_obj_t* parent, const ChartPoint point) {
   line_segment(parent, point.x - 1, point.y - 1, 3, 3);
@@ -197,22 +201,54 @@ int value_y(const Rect strip, const Series& series, int value) {
   return strip.y + ((series.maximum - value) * (strip.height - 1)) / range;
 }
 
+// A straight horizontal or vertical line as ONE lv_line, dashed by LVGL's
+// own line style rather than built from one object per dash - see
+// draw_hour_rules for what one-object-per-dash once did to the LVGL heap.
+// `width`/`height` size the object; the line runs along its longer side.
+// The SW renderer dashes against screen coordinates, so parallel dashed
+// lines line up with each other.
+void dashed_line(lv_obj_t* parent, const int x, const int y, const int width,
+                 const int height, const int stroke, const int dash,
+                 const int gap) {
+  auto* points = new (std::nothrow) lv_point_precise_t[2];
+  if (points == nullptr) return;
+  const bool vertical = height > width;
+  points[0] = {0, 0};
+  points[1] = vertical ? lv_point_precise_t{0, height - 1}
+                       : lv_point_precise_t{width - 1, 0};
+  lv_obj_t* line = lv_line_create(parent);
+  if (line == nullptr) {
+    delete[] points;
+    return;
+  }
+  lv_obj_set_style_bg_opa(line, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(line, 0, 0);
+  lv_obj_set_style_shadow_width(line, 0, 0);
+  lv_obj_set_style_pad_all(line, 0, 0);
+  lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_pos(line, x, y);
+  lv_obj_set_size(line, width, height);
+  lv_obj_set_style_line_color(line, lv_color_black(), 0);
+  lv_obj_set_style_line_width(line, stroke, 0);
+  lv_obj_set_style_line_rounded(line, false, 0);
+  lv_obj_set_style_line_dash_width(line, dash, 0);
+  lv_obj_set_style_line_dash_gap(line, gap, 0);
+  lv_line_set_points(line, points, 2);
+  lv_obj_add_event_cb(line, release_points, LV_EVENT_DELETE, points);
+}
+
 // The window's mean, drawn the full width of the plot.
 //
-// Dashed, and neither 1 px nor a solid 2 px: a solid rule would read as a
-// third series, and a 1 px one is invisible on this panel - the hour rules
-// already proved that. A long pitch keeps it cheap: 20 px per dash across
-// 372 px is about 19 objects, which is the budget this page has to respect
-// (see draw_hour_rules for what happens when it does not).
+// Dashed so it never reads as a third series, and 1 px - 2 px came back from
+// the panel as too heavy once the curves themselves went to 2 px / 1 px. The
+// long 8/12 pitch keeps it distinct from the hour rules' short 3/3 dashes.
 constexpr int kAverageDash = 8;
 constexpr int kAverageGap = 12;
+constexpr int kAverageRuleWidth = 1;
 
 void draw_average_rule(lv_obj_t* parent, const Rect plot, int y) {
-  for (int offset = 0; offset < plot.width;
-       offset += kAverageDash + kAverageGap) {
-    const int length = std::min(kAverageDash, plot.width - offset);
-    line_segment(parent, plot.x + offset, y, length, kDataLineWidth);
-  }
+  dashed_line(parent, plot.x, y, plot.width, kAverageRuleWidth,
+              kAverageRuleWidth, kAverageDash, kAverageGap);
 }
 
 // One series' scale, overlaid on the edge of the plot it belongs to.
@@ -391,8 +427,20 @@ void stroke_swatch(lv_obj_t* parent, const Rect bounds, int width) {
 
 // Grid weight, and the width the hour labels are laid out against. Named so
 // the clamping below and the rule itself cannot drift apart.
-constexpr int kHourRuleWidth = 2;
+constexpr int kHourRuleWidth = 1;
 constexpr int kHourLabelWidth = 20;
+
+// Every hour rule is a 1 px dash. The "1 px rule is invisible" report below
+// predates the draw-order fix in draw_solid_run, so it was never a fair test
+// of 1 px; on the board, after that fix, 1 px dashes show. Solid 2 px end
+// rules were tried and read as too heavy.
+constexpr int kHourRuleDash = 3;
+constexpr int kHourRuleGap = 3;
+
+void dashed_hour_rule(lv_obj_t* parent, const int x, const Rect plot) {
+  dashed_line(parent, x, plot.y, kHourRuleWidth, plot.height, kHourRuleWidth,
+              kHourRuleDash, kHourRuleGap);
+}
 
 // A rule at every whole hour inside the window, with the hour under it.
 //
@@ -401,18 +449,12 @@ constexpr int kHourLabelWidth = 20;
 // label per point was more numbers than the question deserved. Counting
 // rules answers it at a glance.
 //
-// 2 px, like every other stroke on this panel. A 1 px rule was tried and
-// reported back from the board as simply not visible - which is what the
-// board's own rule (pure black, 2 px minimum) says about a reflective
-// display with no backlight, and a grid line nobody can see is not a
-// lighter grid line, it is an absent one.
-//
-// So the separation from data is orientation, not weight: these are
-// full-height verticals behind curves that run horizontally. Nothing here
-// reads as a third series.
+// 1 px dashes (see kHourRuleWidth): lighter than any curve, and vertical
+// behind curves that run horizontally, so nothing here reads as a series.
 //
 // One object per rule, and that is a hard constraint rather than a style
-// preference. This drew each rule as a column of 2 px dashes stepping 4 px
+// preference - dashed_hour_rule gets its dashes from LVGL's line style, not
+// from separate objects. This once drew each rule as a column of 2 px dashes stepping 4 px
 // down the plot, which is 40 lv_objs per rule; at 8 rules across a 7.5 h
 // window that is 320 widgets on top of the ~150 the curves, markers and
 // header already cost, against a 64 KB LVGL heap
@@ -447,7 +489,7 @@ void draw_hour_rules(lv_obj_t* parent, const Rect plot, const Rect axis,
   for (int offset = minutes_to_next_hour(start.minute); offset <= span_minutes;
        offset += 60) {
     const int x = plot.x + offset * (plot.width - 1) / span_minutes;
-    line_segment(parent, x, plot.y, kHourRuleWidth, plot.height);
+    dashed_hour_rule(parent, x, plot);
 
     // The hour itself, centred under its own rule.
     //
@@ -494,6 +536,32 @@ TrendKind trend_of(const Series& series, const TrendThresholds thresholds) {
   return trend_for_series(dense, count, thresholds);
 }
 
+// The same last step trend_of() judges, as a signed delta in the series'
+// own unit. False when there is no step yet (fewer than two readings).
+bool last_step(const Series& series, int* delta) {
+  int newest = 0;
+  int previous = 0;
+  int found = 0;
+  for (std::size_t i = app_core::kIndoorHistoryPoints; i-- > 0 && found < 2;) {
+    if (!series.present[i]) continue;
+    (found == 0 ? newest : previous) = series.value[i];
+    ++found;
+  }
+  if (found < 2) return false;
+  *delta = newest - previous;
+  return true;
+}
+
+// The trend step's size beside its arrow - nothing while Steady or None.
+void trend_step(lv_obj_t* parent, const Rect bounds, const Series& series,
+                const TrendThresholds thresholds, const bool tenths) {
+  int delta = 0;
+  if (!last_step(series, &delta)) return;
+  const std::string step = trend_step_text(delta, thresholds, tenths);
+  if (step.empty()) return;
+  label(parent, step.c_str(), bounds, small_font(), LV_TEXT_ALIGN_LEFT);
+}
+
 }  // namespace
 
 void render_indoor(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
@@ -531,6 +599,8 @@ void render_indoor(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
         LV_TEXT_ALIGN_RIGHT);
   trend_icon(parent, layout.temperature_trend,
              trend_of(temperature, kTemperatureTrend));
+  trend_step(parent, layout.temperature_delta, temperature, kTemperatureTrend,
+             true);
 
   stroke_swatch(parent, layout.humidity_swatch, kHumidityLineWidth);
   humidity_icon(parent, layout.humidity_icon);
@@ -539,6 +609,7 @@ void render_indoor(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
   label(parent, reading, layout.humidity, reading_font(), LV_TEXT_ALIGN_RIGHT);
   trend_icon(parent, layout.humidity_trend,
              trend_of(humidity, kHumidityTrend));
+  trend_step(parent, layout.humidity_delta, humidity, kHumidityTrend, false);
 
   divider(parent, layout.divider);
 
