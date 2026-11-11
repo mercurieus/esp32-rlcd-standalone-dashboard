@@ -89,6 +89,18 @@ HOST_TEST(minute_formatter_keeps_only_hours_and_minutes) {
   EXPECT_EQ(ui::format_minute_clock("unknown"), std::string("unknown"));
 }
 
+HOST_TEST(trend_step_text_is_the_unsigned_size_of_a_real_move) {
+  // Below the move threshold the arrow says Steady, so no number.
+  EXPECT_EQ(ui::trend_step_text(1, ui::kTemperatureTrend, true), std::string(""));
+  EXPECT_EQ(ui::trend_step_text(0, ui::kHumidityTrend, false), std::string(""));
+  EXPECT_EQ(ui::trend_step_text(3, ui::kTemperatureTrend, true), std::string("0.3"));
+  EXPECT_EQ(ui::trend_step_text(-3, ui::kTemperatureTrend, true), std::string("0.3"));
+  EXPECT_EQ(ui::trend_step_text(99, ui::kTemperatureTrend, true), std::string("9.9"));
+  EXPECT_EQ(ui::trend_step_text(-125, ui::kTemperatureTrend, true), std::string("13"));
+  EXPECT_EQ(ui::trend_step_text(-2, ui::kHumidityTrend, false), std::string("2"));
+  EXPECT_EQ(ui::trend_step_text(100, ui::kHumidityTrend, false), std::string("100"));
+}
+
 HOST_TEST(mast_clock_source_is_compact_and_truthful) {
   // The DEMO prefix used to be on every case, including ones that are not
   // demo data at all. Network-synced time is real, RTC time is real, and only

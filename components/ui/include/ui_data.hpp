@@ -1494,6 +1494,30 @@ constexpr TrendKind trend_for_series(const std::array<int, N>& samples,
   return TrendKind::Steady;
 }
 
+// The size of a trend step, unsigned - the arrow beside it carries the
+// direction. Empty below the series' `move` threshold, exactly when the
+// arrow says Steady, so a number never contradicts a flat bar.
+//
+// `tenths` is for series kept in tenths (temperature in decidegrees): one
+// decimal below 10, whole units from there, which keeps the widest text
+// inside kIndoorTemperatureDeltaWidth.
+inline std::string trend_step_text(const int delta,
+                                   const TrendThresholds thresholds,
+                                   const bool tenths) {
+  const int magnitude = delta < 0 ? -delta : delta;
+  if (magnitude < thresholds.move) return {};
+  char buffer[12];
+  if (!tenths) {
+    std::snprintf(buffer, sizeof(buffer), "%d", magnitude);
+  } else if (magnitude < 100) {
+    std::snprintf(buffer, sizeof(buffer), "%d.%d", magnitude / 10,
+                  magnitude % 10);
+  } else {
+    std::snprintf(buffer, sizeof(buffer), "%d", (magnitude + 5) / 10);
+  }
+  return buffer;
+}
+
 // Wall-clock hour and minute, for labelling a chart's time axis.
 struct ClockHm {
   uint8_t hour;
@@ -1554,9 +1578,10 @@ constexpr std::size_t indoor_history_origin(const app_core::IndoorData& indoor) 
 // did not, and the hero's size was not buying enough to justify what it cost
 // the only part of the page that shows change over time.
 //
-// Each measure now appears once, in the header, as a group of four: the
-// stroke its curve is drawn with, its icon, the current reading, and the
-// trend arrow. Putting the stroke swatch beside the reading is what retired
+// Each measure now appears once, in the header, as a group of five: the
+// stroke its curve is drawn with, its icon, the current reading, the trend
+// arrow, and how far that last step moved (unsigned - the arrow already
+// says which way). Putting the stroke swatch beside the reading is what retired
 // the legend that used to sit under the plot, where it competed with the
 // time labels for the same row.
 struct IndoorLayout {
@@ -1597,6 +1622,11 @@ struct IndoorLayout {
   // the only row an hour scale could use. A label per rule answers the same
   // question at every point on the axis instead of at two of them.
   Rect axis;
+  // The size of the last step beside each trend arrow, in small type, empty
+  // while the reading is steady. Appended rather than placed beside their
+  // arrows so indoor_layout()'s positional initialiser stays in order.
+  Rect temperature_delta;
+  Rect humidity_delta;
 };
 
 // The page title's box. 60 px was measured against the wrong string: the
@@ -1649,6 +1679,13 @@ inline constexpr int kIndoorHumidityScaleWidth = 31;
 inline constexpr int kIndoorSwatchWidth = 14;
 inline constexpr int kIndoorMeasureIconWidth = 13;
 inline constexpr int kIndoorTrendIconWidth = 14;
+// The trend step boxes, measured in lv_font_montserrat_14 for the widest
+// text each can hold plus label()'s 1 px inset each side. Temperature shows
+// tenths below 10 degrees ("4.4", 21.9 px) and whole degrees from there
+// ("99", narrower); humidity shows whole percent up to "100" (23.8 px).
+inline constexpr int kIndoorTemperatureDeltaWidth = 24;
+inline constexpr int kIndoorHumidityDeltaWidth = 26;
+inline constexpr int kIndoorDeltaGap = 2;
 
 constexpr IndoorLayout indoor_layout(const Rect bounds) {
   const int inset = 8;
@@ -1659,28 +1696,42 @@ constexpr IndoorLayout indoor_layout(const Rect bounds) {
 
   // Laid out right to left from the panel edge, because each group is
   // right-aligned against its own arrow and the arrows against the edge.
-  // The reading widths are the worst case with room to spare: at
-  // montserrat_20 "-10.5°C" measures about 66 px of the 90 it gets and
-  // "100%" about 50 of 58. Labels are LV_LABEL_LONG_DOT, so anything wider
-  // still ellipsises and is logged in a debug build rather than
-  // overprinting its neighbour.
-  const int temperature_width = 90;
-  const int humidity_width = 58;
+  // The reading widths are measured from lv_font_montserrat_20's glyph
+  // table: the widest temperature, "-10.4°C", is 69.1 px and "100%" is
+  // 50.9 px, each plus label()'s 1 px inset per side. They were a looser 90
+  // and 58 until the trend step needed the width. Labels are
+  // LV_LABEL_LONG_DOT, so a colder room ellipsises and is logged in a debug
+  // build rather than overprinting its neighbour.
+  const int temperature_width = 72;
+  const int humidity_width = 54;
+  // Small type sits on the readings' baseline: montserrat_20 (22/4) in a
+  // box at header_y puts it at header_y + 19, and montserrat_14 (16/3)
+  // meets that from header_y + 5.
+  const int delta_y = header_y + 5;
 
-  const int humidity_trend_x = bounds.right() - inset - kIndoorTrendIconWidth;
+  const int humidity_delta_x =
+      bounds.right() - inset - kIndoorHumidityDeltaWidth;
+  const int humidity_trend_x =
+      humidity_delta_x - kIndoorDeltaGap - kIndoorTrendIconWidth;
   const int humidity_x = humidity_trend_x - 4 - humidity_width;
   const int humidity_icon_x = humidity_x - 4 - kIndoorMeasureIconWidth;
   const int humidity_swatch_x = humidity_icon_x - 3 - kIndoorSwatchWidth;
+  const int temperature_delta_x =
+      humidity_swatch_x - 10 - kIndoorTemperatureDeltaWidth;
   const int temperature_trend_x =
-      humidity_swatch_x - 10 - kIndoorTrendIconWidth;
+      temperature_delta_x - kIndoorDeltaGap - kIndoorTrendIconWidth;
   const int temperature_x = temperature_trend_x - 4 - temperature_width;
   const int temperature_icon_x = temperature_x - 4 - kIndoorMeasureIconWidth;
   const int temperature_swatch_x =
       temperature_icon_x - 3 - kIndoorSwatchWidth;
 
+  // The plot takes every row the hour axis does not need, down to the
+  // bottom of the content bounds. It was a fixed 160 px, which left ~15 px
+  // of blank band under the hour labels.
+  const int axis_gap = 3;
   const int plot_y = bounds.y + 44;
-  const int plot_height = 160;
-  const int axis_y = plot_y + plot_height + 3;
+  const int plot_height = bounds.bottom() - row_height - axis_gap - plot_y;
+  const int axis_y = plot_y + plot_height + axis_gap;
 
   // The scales sit in gutters beside the plot, not over it.
   //
@@ -1716,6 +1767,8 @@ constexpr IndoorLayout indoor_layout(const Rect bounds) {
       {bounds.x + inset, plot_y, kIndoorTemperatureScaleWidth, plot_height},
       {plot_x + plot_width, plot_y, kIndoorHumidityScaleWidth, plot_height},
       {plot_x, axis_y, plot_width, row_height},
+      {temperature_delta_x, delta_y, kIndoorTemperatureDeltaWidth, row_height},
+      {humidity_delta_x, delta_y, kIndoorHumidityDeltaWidth, row_height},
   };
 }
 
@@ -1788,10 +1841,16 @@ static_assert(
     "the header measure groups do not overprint the page title");
 static_assert(
     indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
-            .temperature_trend.right() <
+            .temperature_delta.right() <
         indoor_layout(content_bounds(safe_canvas(), app_core::PageId::Indoor))
             .humidity_swatch.x,
     "the two header measure groups do not run into each other");
+static_assert(
+    rect_within(content_bounds(safe_canvas(), app_core::PageId::Indoor),
+                indoor_layout(
+                    content_bounds(safe_canvas(), app_core::PageId::Indoor))
+                    .humidity_delta),
+    "the humidity trend step stays inside the content bounds");
 
 struct HomeLayout {
   Rect hero;
