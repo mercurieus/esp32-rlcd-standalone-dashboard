@@ -5,21 +5,39 @@ ESP32-S3-RLCD-4.2, built to run on its own: no proxy, no cloud service, no
 companion app. The board joins your Wi-Fi through its own captive portal and
 fetches everything itself.
 
-![Home clock and Taiwan market page layouts](docs/assets/ui-layout-samples.svg)
+<p>
+  <img src="docs/assets/screens/home.png" width="400" alt="Home: a large clock, the full date in the tray, battery and current weather tiles">
+  <img src="docs/assets/screens/indoor.png" width="400" alt="Indoor: temperature and humidity history with hour rules, per-series scales and trend arrows">
+</p>
+<p>
+  <img src="docs/assets/screens/ua-fx.png" width="400" alt="UA exchange rate: USD against the hryvnia over 30 days, with EUR and the range">
+  <img src="docs/assets/screens/us-market.png" width="400" alt="US market: the S&amp;P 500 intraday with NASDAQ and the day's range">
+</p>
+<p>
+  <img src="docs/assets/screens/weather.png" width="400" alt="Weather: current conditions and a seven-day forecast">
+</p>
+
+Screenshots read back from the panel's own framebuffer (`GET /shot` in a debug
+build). The weather page's location line is blanked here.
 
 ## What it does
 
-A five-page carousel — a clock-dominant Home, Taiwan and US market pages,
-weather, and indoor climate — plus a Setup page and a firmware-update page that
-sit outside the rotation and appear only when they have something to say.
+A carousel of pages — a clock-dominant Home, UA exchange rates, the US market,
+weather, and an indoor climate history — plus Now Playing when the optional
+audio module has something playing, and a Setup page and a firmware-update
+page that sit outside the rotation and appear only when they have something to
+say.
+
+Every page but Home carries the time and a short date in its top bar; Home
+shows the full date there instead, since its hero already is the time.
 
 | Source | Where the data comes from |
 | --- | --- |
 | Time | SNTP, falling back to the onboard PCF85063 RTC, then to compile time |
-| Indoor | Onboard SHTC3 over I²C |
+| Indoor | Onboard SHTC3 over I²C, sampled every five minutes into a history ring that survives reboots |
 | Weather | Open-Meteo, located by IP geolocation |
-| Taiwan index | TWSE |
-| US indices | Yahoo Finance quote endpoint |
+| UA exchange rates | National Bank of Ukraine open data — USD and EUR, with a 30-day USD history |
+| US indices | Yahoo Finance chart endpoint |
 | Battery | ADC across the board's sense divider |
 
 Home dwells 30 s, data pages 12 s; KEY and BOOT step backward and forward, and
@@ -35,12 +53,17 @@ easy to undo by accident:
 - A provider with no data leaves `valid` false and the page renders `NO DATA`.
 - Stale is not absent — a real reading that aged shows its real values with an
   ` OLD` marker instead of being discarded.
-- TWSE publishes a daily close only, so the Taiwan chart, grid and axis are
-  suppressed rather than drawing a flat line through a repeated value. The
-  figures would be real but the shape invented.
+- A chart never bridges a gap. A missing indoor sample breaks the curve rather
+  than drawing a segment across time nobody measured, and the hour axis needs a
+  synced clock — without one, no hour is labelled at all.
+- A trend arrow reads the latest step only, and its number is the size of that
+  step. Below the noise threshold it shows a flat bar and no number.
 - An invalid tile draws no icon. A thermometer glyph asserts a reading exists.
-- The clock says which source it is using — `SYNC`, `RTC`, or `FALLBACK` — so a
-  compile-time fallback is never mistaken for network time.
+- A clock that is neither network time nor a valid RTC read blinks — digits and
+  date at 1 Hz, colon held, like a digital clock after a power cut — so a
+  compile-time fallback is never mistaken for the real time. Home also says
+  `CLOCK FROM RTC` or `CLOCK NOT SYNCED` whenever the time is not from the
+  network.
 - Auto-rotation skips pages with nothing worth dwelling on, but never removes
   them: manual navigation still reaches every page.
 
@@ -145,7 +168,7 @@ components/wifi_provision esp_wifi, NVS, captive portal; owns the AppSnapshot
 components/ota            image validation, update session, rollback guard
 components/net_time       SNTP
 components/weather        IP geolocation + Open-Meteo
-components/market         TWSE + Yahoo
+components/market         NBU exchange rates + Yahoo
 components/net_log        log streaming over TCP, off by default
 ```
 
@@ -223,7 +246,7 @@ record in [`docs/hardware/first-layout-checklist.md`](docs/hardware/first-layout
 
 ## Status
 
-The firmware runs standalone with all four data sources live. What has not been
+The firmware runs standalone with every data source live. What has not been
 confirmed on physical hardware is tracked in the acceptance checklist above and
 should not be assumed working — notably the ROM-downloader path after the OTA
 partition migration, the update flow end to end from a phone, and battery
