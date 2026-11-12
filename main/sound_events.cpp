@@ -4,10 +4,12 @@
 #include "net_time.hpp"
 #include "settings_menu.hpp"
 #include "ui_data.hpp"
+#include "wifi_provision.hpp"
 
 #include <atomic>
 #include <cstdint>
 #include <iterator>
+#include <cstring>
 #include <string>
 
 #include <esp_err.h>
@@ -150,7 +152,12 @@ void play_async(SoundEvent event, const audio::Note* notes, size_t count) {
 
 }  // namespace
 
-bool allowed(SoundEvent event) {
+namespace {
+
+// The one policy evaluation. force (the debug /sound route only) treats the
+// clock as trusted and outside quiet hours; the Volume preset is still read
+// for real, so Off stays silent - Off means off, spec section 4.
+bool verdict_for(SoundEvent event, bool force) {
   const bool volume_off = ui::volume_preset() == ui::VolumePreset::Off;
   const std::string source = clock_source();
   const bool trusted = ui::clock_is_set(source);
@@ -158,8 +165,8 @@ bool allowed(SoundEvent event) {
   // its "hour" would be the compile time's - so it is not even asked.
   const bool quiet =
       trusted && ui::in_quiet_hours(ui::quiet_hours_preset(), local_hour());
-  const bool verdict =
-      app_core::sound_allowed(event, volume_off, quiet, trusted);
+  const bool verdict = app_core::sound_allowed(
+      event, volume_off, force ? false : quiet, force ? true : trusted);
   if (!verdict) {
     // Every silenced sound says why, so "it didn't beep" has an answer in the
     // log. Button ticks would be one line per press; those go to debug.
@@ -172,6 +179,10 @@ bool allowed(SoundEvent event) {
   }
   return verdict;
 }
+
+}  // namespace
+
+bool allowed(SoundEvent event) { return verdict_for(event, false); }
 
 void set_boot_clock(const app_core::RtcDateTime& clock, bool rtc_valid) {
   g_boot_clock = clock;
@@ -233,6 +244,64 @@ void play_farewell_blocking() {
   if (result != ESP_OK) {
     ESP_LOGI(kTag, "farewell sound did not play: %s", esp_err_to_name(result));
   }
+}
+
+#ifndef NDEBUG
+namespace {
+
+// POST /sound's handler (wifi_provision::set_sound_test_handler): plays any
+// event's real melody on the audio module's async player, so it never holds
+// the httpd task, and "farewell" plays only the melody - nothing restarts.
+// Without force this is exactly the policy a real event meets; with force the
+// quiet-hours and clock-trust gates are skipped but Volume Off still wins.
+wifi_provision::SoundTestResult debug_play_event(const char* name, bool force) {
+  using Result = wifi_provision::SoundTestResult;
+  struct Entry {
+    const char* name;
+    SoundEvent event;
+    const audio::Note* notes;
+    size_t count;
+  };
+  static const Entry kEntries[] = {
+      {"boot", SoundEvent::Boot, kBootMelody, std::size(kBootMelody)},
+      {"farewell", SoundEvent::Farewell, kFarewellMelody,
+       std::size(kFarewellMelody)},
+      {"power_lost", SoundEvent::PowerLost, kPowerLost, std::size(kPowerLost)},
+      {"power_back", SoundEvent::PowerBack, kPowerBack, std::size(kPowerBack)},
+      {"battery_low", SoundEvent::BatteryLow, kBatteryLow,
+       std::size(kBatteryLow)},
+      {"battery_critical", SoundEvent::BatteryCritical, kFarewellMelody,
+       std::size(kFarewellMelody)},
+      {"button", SoundEvent::Button, kButtonTick, std::size(kButtonTick)},
+  };
+  for (const Entry& entry : kEntries) {
+    if (std::strcmp(name, entry.name) != 0) continue;
+    ESP_LOGW(kTag, "POST /sound -> %s%s", entry.name, force ? " (forced)" : "");
+    if (!verdict_for(entry.event, force)) {
+      return {Result::Kind::Suppressed,
+              ui::volume_preset() == ui::VolumePreset::Off
+                  ? "volume is Off"
+                  : "quiet hours or clock not trusted (use force=1)"};
+    }
+    const esp_err_t played = audio::audio_play_notes_async(entry.notes, entry.count);
+    if (played == ESP_ERR_INVALID_STATE) {
+      return {Result::Kind::Suppressed, "audio busy, try again shortly"};
+    }
+    if (played != ESP_OK) {
+      return {Result::Kind::Suppressed, "audio failed to start"};
+    }
+    return {Result::Kind::Played, nullptr};
+  }
+  return {Result::Kind::UnknownEvent, nullptr};
+}
+
+}  // namespace
+#endif
+
+void register_debug_routes() {
+#ifndef NDEBUG
+  wifi_provision::set_sound_test_handler(&debug_play_event);
+#endif
 }
 
 }  // namespace sound_events

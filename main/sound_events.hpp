@@ -53,4 +53,8 @@ bool allowed(app_core::SoundEvent event);
 // the rest. Registered as app_core's before-restart hook.
 void play_farewell_blocking();
 
+// Registers the debug-only POST /sound handler with the portal (a no-op in a
+// release build, where the route does not exist). Call once from app_main.
+void register_debug_routes();
+
 }  // namespace sound_events

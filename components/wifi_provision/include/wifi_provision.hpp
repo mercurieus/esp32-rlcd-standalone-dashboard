@@ -81,4 +81,23 @@ void set_ota(const app_core::OtaData& ota);
 // so a device in the field does not serve pictures of its screen to the LAN.
 void set_screenshot_provider(bool (*provider)(uint8_t* out, size_t length));
 
+#ifndef NDEBUG
+// What POST /sound reports. Played: the sound started. Suppressed: the
+// policy (or a busy audio module) said no, `reason` is a static string saying
+// which. UnknownEvent: the name is not one the handler knows (the route
+// answers 400). `reason` is null unless Suppressed.
+struct SoundTestResult {
+  enum class Kind { Played, Suppressed, UnknownEvent } kind;
+  const char* reason;
+};
+
+// Registers what POST /sound?event=<name>[&force=1] calls. The portal only
+// parses the two query values; the event names, melodies and the policy live
+// in main/sound_events.cpp, so this component learns nothing about audio. The
+// handler must only start the sound (async) - it runs on the httpd task.
+// Debug builds only, like the route itself.
+void set_sound_test_handler(SoundTestResult (*handler)(const char* event,
+                                                       bool force));
+#endif
+
 }  // namespace wifi_provision

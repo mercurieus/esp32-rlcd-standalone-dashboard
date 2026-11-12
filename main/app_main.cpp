@@ -1809,6 +1809,7 @@ extern "C" void app_main() {
   // policy treats as quiet: no chime.
   sound_events::set_boot_clock(clock, rtc_ok);
   sound_events::init(static_cast<int>(reset_reason));
+  sound_events::register_debug_routes();
   // Every firmware-initiated esp_restart() (OTA accept, portal reboot) says
   // goodbye through this first.
   app_core::set_before_restart_hook(&sound_events::play_farewell_blocking);
