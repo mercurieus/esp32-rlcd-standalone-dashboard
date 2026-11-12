@@ -25,6 +25,7 @@
 #include <esp_timer.h>
 
 #include "audio_drain.hpp"
+#include "audio_notes.hpp"
 #include "board_i2c.hpp"
 #include "board_pins.hpp"
 #include "tray_registry.hpp"
@@ -88,6 +89,14 @@ constexpr int kMinFrequencyHz = 100;
 constexpr int kMaxFrequencyHz = 6000;
 constexpr int kMinDurationMs = 50;
 constexpr int kMaxDurationMs = 3000;  // safety cap; callers should ask for far less
+// A rest only has to be audible as a gap, so it may be far shorter than a
+// note (a 30 ms rest separates two repeated pitches).
+constexpr int kMinRestMs = 10;
+// Bounds the whole sequence, not one note: audio_play_notes() holds the codec
+// and the amplifier for its full length, so without a total cap thirty-two
+// 3-second notes would be a minute-and-a-half amplifier window.
+constexpr int kMaxSequenceMs = 5000;
+constexpr size_t kMaxNotes = 32;
 
 // Fade in/out inside the tone itself, so the waveform's own start and end
 // are already at zero - an abrupt sine start/stop is a step function, and a
@@ -141,6 +150,13 @@ constexpr int kSweepGapMs = 300;  // silence between steps, amp off, so steps ar
 i2s_chan_handle_t g_tx_handle = nullptr;
 esp_codec_dev_handle_t g_codec_dev = nullptr;
 int g_volume_percent = kOutputVolumePercent;
+// True from audio_stream_open() until the stream closes (by audio_stream_close()
+// or the watchdog). Declared up here, not with the rest of the streaming state
+// further down, because audio_play_notes() must refuse while a stream holds the
+// codec and is defined before that block. Written only under g_stream_mutex;
+// read unlocked by the refusal check, which is a best-effort early exit - the
+// async path's claim_playback_slot() is what actually excludes a stream.
+bool g_stream_open = false;
 // Separate from the codec's own I2C control handle (owned internally by
 // audio_codec_new_i2c_ctrl in setup_codec()): this one exists purely so
 // dump_registers() can issue plain register reads without reaching into
@@ -358,9 +374,29 @@ void dump_registers() {
   }
 }
 
-// Plays lead-in silence, the tone itself, and lead-out silence around the
-// amplifier, per the drain-safe sequence documented on kDrainMs. Assumes
-// the codec is already open at the sample rate/format this module uses.
+bool write_pcm(const std::vector<int16_t>& pcm, const char* what) {
+  const int result = esp_codec_dev_write(
+      g_codec_dev, const_cast<int16_t*>(pcm.data()),
+      static_cast<int>(pcm.size() * sizeof(int16_t)));
+  if (result != ESP_CODEC_DEV_OK) {
+    ESP_LOGW(kTag, "%s write failed: %d", what, result);
+    return false;
+  }
+  return true;
+}
+
+// Plays lead-in silence, every note of the sequence, and lead-out silence
+// around ONE amplifier window, per the drain-safe sequence documented on
+// kDrainMs. A single tone is simply a sequence of one note, so tones and
+// melodies share exactly one pop-free sequence rather than two that could
+// drift apart. Notes are generated and written one at a time (each with its
+// own kFadeMs fades, so every note starts and ends at zero and adjacent notes
+// cannot click against each other) instead of building the whole melody in
+// one buffer. A rest (frequency_hz == 0) is written as silence with the
+// amplifier still enabled: dropping GPIO46 between notes would add a
+// turn-off/turn-on transition per gap, which is what this sequence avoids.
+// Assumes the codec is already open at the sample rate/format this module
+// uses and that the notes were validated by validate_notes().
 // Logs GPIO46's actual driven level right after raising and right after
 // dropping it - now trustworthy, since configure_amp_gpio() enables the
 // input path too (see its comment). Returns false if any write failed, but
@@ -371,19 +407,9 @@ void dump_registers() {
 // other half of telling "the readback lied" apart from "the enable line
 // does not gate anything": if a tone is just as audible with the enable
 // line never raised, the amplifier is not actually controlled by this pin.
-bool write_tone_step(int frequency_hz, int duration_ms,
-                     bool enable_amplifier = true) {
-  std::vector<int16_t> lead = make_silence(kSilenceLeadMs, kSampleRateHz);
-  std::vector<int16_t> tone = make_tone(frequency_hz, duration_ms);
-  std::vector<int16_t> trail = make_silence(kSilenceTrailMs, kSampleRateHz);
-
-  bool ok = true;
-  int result = esp_codec_dev_write(g_codec_dev, lead.data(),
-                                   static_cast<int>(lead.size() * sizeof(int16_t)));
-  if (result != ESP_CODEC_DEV_OK) {
-    ESP_LOGW(kTag, "tone lead-in write failed: %d", result);
-    ok = false;
-  }
+bool write_sequence_step(const Note* notes, size_t count,
+                         bool enable_amplifier = true) {
+  bool ok = write_pcm(make_silence(kSilenceLeadMs, kSampleRateHz), "tone lead-in");
 
   if (ok && enable_amplifier) {
     // Before the amplifier actually goes high - the tray's indicator (see
@@ -407,23 +433,14 @@ bool write_tone_step(int frequency_hz, int duration_ms,
              gpio_get_level(board::kAudioAmpEnable));
   }
 
-  if (ok) {
-    result = esp_codec_dev_write(g_codec_dev, tone.data(),
-                                 static_cast<int>(tone.size() * sizeof(int16_t)));
-    if (result != ESP_CODEC_DEV_OK) {
-      ESP_LOGW(kTag, "tone write failed: %d", result);
-      ok = false;
-    }
+  for (size_t index = 0; ok && index < count; ++index) {
+    const Note& note = notes[index];
+    ok = note.frequency_hz == 0
+             ? write_pcm(make_silence(note.duration_ms, kSampleRateHz), "rest")
+             : write_pcm(make_tone(note.frequency_hz, note.duration_ms), "tone");
   }
 
-  if (ok) {
-    result = esp_codec_dev_write(g_codec_dev, trail.data(),
-                                 static_cast<int>(trail.size() * sizeof(int16_t)));
-    if (result != ESP_CODEC_DEV_OK) {
-      ESP_LOGW(kTag, "tone trail-out write failed: %d", result);
-      ok = false;
-    }
-  }
+  if (ok) ok = write_pcm(make_silence(kSilenceTrailMs, kSampleRateHz), "tone trail-out");
 
   // See kDrainMs: esp_codec_dev_write() returning does not mean the samples
   // it just queued have reached the pin yet. Waiting here, before the
@@ -444,6 +461,31 @@ bool write_tone_step(int frequency_hz, int duration_ms,
   }
 
   return ok;
+}
+
+// One tone, as a one-note sequence - the diagnostic sweep's per-step call.
+bool write_tone_step(int frequency_hz, int duration_ms,
+                     bool enable_amplifier = true) {
+  const Note note{frequency_hz, duration_ms};
+  return write_sequence_step(&note, 1, enable_amplifier);
+}
+
+// Rejects what audio_play_notes() will not play, before anything touches the
+// codec or the amplifier. Rests may be shorter than notes (kMinRestMs).
+bool validate_notes(const Note* notes, size_t count) {
+  if (notes == nullptr || count == 0 || count > kMaxNotes) return false;
+  for (size_t i = 0; i < count; ++i) {
+    const Note& note = notes[i];
+    if (note.duration_ms > kMaxDurationMs) return false;
+    if (note.frequency_hz == 0) {
+      if (note.duration_ms < kMinRestMs) return false;
+    } else if (note.frequency_hz < kMinFrequencyHz ||
+               note.frequency_hz > kMaxFrequencyHz ||
+               note.duration_ms < kMinDurationMs) {
+      return false;
+    }
+  }
+  return notes_duration_ms(notes, count) <= static_cast<uint32_t>(kMaxSequenceMs);
 }
 
 }  // namespace
@@ -534,19 +576,22 @@ esp_err_t audio_init() {
   return ESP_OK;
 }
 
-esp_err_t audio_play_tone(int frequency_hz, int duration_ms) {
+esp_err_t audio_play_notes(const Note* notes, size_t count) {
   if (g_codec_dev == nullptr) {
-    ESP_LOGW(kTag, "audio_play_tone called before a successful audio_init()");
+    ESP_LOGW(kTag, "audio_play_notes called before a successful audio_init()");
     return ESP_ERR_INVALID_STATE;
   }
-
-  const int clamped_frequency =
-      std::clamp(frequency_hz, kMinFrequencyHz, kMaxFrequencyHz);
-  const int clamped_duration =
-      std::clamp(duration_ms, kMinDurationMs, kMaxDurationMs);
-  if (clamped_frequency != frequency_hz || clamped_duration != duration_ms) {
-    ESP_LOGW(kTag, "tone request clamped to %d Hz / %d ms (asked %d Hz / %d ms)",
-             clamped_frequency, clamped_duration, frequency_hz, duration_ms);
+  if (!validate_notes(notes, count)) {
+    ESP_LOGW(kTag, "audio_play_notes: rejected a sequence of %u notes",
+             static_cast<unsigned>(count));
+    return ESP_ERR_INVALID_ARG;
+  }
+  // A stream holds the codec and the amplifier for its whole session; opening
+  // it again here would be a silent no-op and then close it from under the
+  // stream. Same refusal the async path gets from claim_playback_slot().
+  if (g_stream_open) {
+    ESP_LOGW(kTag, "audio_play_notes refused: an audio stream is open");
+    return ESP_ERR_INVALID_STATE;
   }
 
   esp_codec_dev_sample_info_t sample_info{};
@@ -563,10 +608,29 @@ esp_err_t audio_play_tone(int frequency_hz, int duration_ms) {
   // volume it was given on a previous, since-closed session.
   esp_codec_dev_set_out_vol(g_codec_dev, g_volume_percent);
 
-  const bool ok = write_tone_step(clamped_frequency, clamped_duration);
+  const bool ok = write_sequence_step(notes, count);
 
   esp_codec_dev_close(g_codec_dev);
   return ok ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t audio_play_tone(int frequency_hz, int duration_ms) {
+  if (g_codec_dev == nullptr) {
+    ESP_LOGW(kTag, "audio_play_tone called before a successful audio_init()");
+    return ESP_ERR_INVALID_STATE;
+  }
+  const int clamped_frequency =
+      std::clamp(frequency_hz, kMinFrequencyHz, kMaxFrequencyHz);
+  const int clamped_duration =
+      std::clamp(duration_ms, kMinDurationMs, kMaxDurationMs);
+  if (clamped_frequency != frequency_hz || clamped_duration != duration_ms) {
+    ESP_LOGW(kTag, "tone request clamped to %d Hz / %d ms (asked %d Hz / %d ms)",
+             clamped_frequency, clamped_duration, frequency_hz, duration_ms);
+  }
+  // A tone is a sequence of one note. Clamping stays here (the /beep
+  // contract); audio_play_notes() rejects rather than clamps.
+  const Note note{clamped_frequency, clamped_duration};
+  return audio_play_notes(&note, 1);
 }
 
 esp_err_t audio_play_diagnostic_sweep(bool enable_amplifier) {
@@ -705,6 +769,20 @@ void tone_task(void* argument) {
   vTaskDeleteWithCaps(nullptr);
 }
 
+// Owns a private copy of the caller's notes: the caller's array is usually a
+// constexpr table or a stack local, and this task outlives the call that
+// started it. Same slot/teardown discipline as tone_task() above.
+struct NotesRequest {
+  std::vector<Note> notes;
+};
+
+void notes_task(void* argument) {
+  std::unique_ptr<NotesRequest> request(static_cast<NotesRequest*>(argument));
+  audio_play_notes(request->notes.data(), request->notes.size());
+  xSemaphoreGive(g_playback_busy);
+  vTaskDeleteWithCaps(nullptr);
+}
+
 struct SweepRequest {
   bool enable_amplifier;
 };
@@ -748,7 +826,6 @@ void sweep_task(void* argument) {
 // flight could tear down state out from under it.
 SemaphoreHandle_t g_stream_mutex = nullptr;
 esp_timer_handle_t g_stream_watchdog = nullptr;
-bool g_stream_open = false;
 // Set once real audio starts flowing (see audio_stream_write()), not at
 // open() - opening a stream that never receives a chunk must never touch
 // GPIO46 or the tray at all.
@@ -882,6 +959,43 @@ esp_err_t audio_play_tone_async(int frequency_hz, int duration_ms) {
   }
   (void)request.release();  // the task owns it now
   ESP_LOGI(kTag, "tone started: %d Hz, %d ms", frequency_hz, duration_ms);
+  return ESP_OK;
+}
+
+esp_err_t audio_play_notes_async(const Note* notes, size_t count) {
+  if (g_codec_dev == nullptr) {
+    ESP_LOGW(kTag, "audio_play_notes_async called before a successful audio_init()");
+    return ESP_ERR_INVALID_STATE;
+  }
+  // Validated before the slot is claimed, so a bad sequence is reported as a
+  // bad argument even while something else is playing, and never takes the slot.
+  if (!validate_notes(notes, count)) {
+    ESP_LOGW(kTag, "audio_play_notes_async: rejected a sequence of %u notes",
+             static_cast<unsigned>(count));
+    return ESP_ERR_INVALID_ARG;
+  }
+  if (!claim_playback_slot()) {
+    ESP_LOGW(kTag, "audio_play_notes_async refused: playback already in progress");
+    return ESP_ERR_INVALID_STATE;
+  }
+  auto request = std::make_unique<NotesRequest>();
+  request->notes.assign(notes, notes + count);
+  if (xTaskCreateWithCaps(&notes_task, "audio_notes", kPlaybackTaskStackBytes,
+                          request.get(), tskIDLE_PRIORITY + 1, nullptr,
+                          kPlaybackTaskCaps) != pdPASS) {
+    ESP_LOGE(kTag,
+             "audio notes task creation failed: free PSRAM=%u largest "
+             "PSRAM block=%u",
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
+             static_cast<unsigned>(
+                 heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)));
+    xSemaphoreGive(g_playback_busy);
+    return ESP_ERR_NO_MEM;
+  }
+  (void)request.release();  // the task owns it now
+  ESP_LOGI(kTag, "note sequence started: %u notes, %u ms",
+           static_cast<unsigned>(count),
+           static_cast<unsigned>(notes_duration_ms(notes, count)));
   return ESP_OK;
 }
 
