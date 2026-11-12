@@ -31,6 +31,7 @@
 #include <cstring>
 #include <optional>
 #include <ctime>
+#include <sys/time.h>
 #include <string>
 
 #include <driver/i2c_master.h>
@@ -1364,7 +1365,13 @@ std::optional<app_core::RtcDateTime> g_weather_fetched;
   }
 }
 
-constexpr uint32_t kNetTimeCheckPeriodMs = 60'000;
+// Handle of net_time_monitor_task, so the SNTP observer can wake it.
+TaskHandle_t g_net_time_monitor = nullptr;
+
+// Runs on the lwIP thread for every sync; a notification is all it may do.
+void wake_net_time_monitor() {
+  if (g_net_time_monitor != nullptr) xTaskNotifyGive(g_net_time_monitor);
+}
 
 // 1 Jan 2000 was a Saturday; days-since then mod 7 gives the weekday. Local
 // to this file - components/ui's own copy of this formatting isn't a public
@@ -1400,9 +1407,10 @@ void format_clock(const app_core::RtcDateTime& clock, app_core::ClockData& out) 
   out.source = "SNTP";
 }
 
-// Polls net_time::synced() roughly once a minute - the visible clock itself
-// only ever repaints on a minute rollover, so anything faster buys nothing.
-// Publishes only once synced; before that this does nothing at all, leaving
+// Publishes the network clock the moment a sync lands (the observer notifies
+// this task) and then on every real minute boundary, so the panel's minute
+// flips with the wall clock instead of up to a minute late. Before synced it
+// just re-checks every 60 s. Publishes only once synced; before that this does nothing at all, leaving
 // the RTC/compile-time fallback clock (and its own honest source string)
 // exactly as already set at startup.
 [[noreturn]] void net_time_monitor_task(void*) {
@@ -1412,8 +1420,8 @@ void format_clock(const app_core::RtcDateTime& clock, app_core::ClockData& out) 
   // re-writes keep the crystal's drift from accumulating across the months a
   // device like this stays powered.
   bool rtc_written = false;
-  uint32_t since_rtc_write_ms = 0;
-  constexpr uint32_t kRtcRefreshMs = 24 * 60 * 60 * 1000;
+  int64_t last_rtc_write_epoch = 0;
+  constexpr int64_t kRtcRefreshSeconds = 24 * 60 * 60;
   for (;;) {
     app_core::RtcDateTime clock{};
     if (net_time::synced() && net_time::now(clock)) {
@@ -1421,15 +1429,25 @@ void format_clock(const app_core::RtcDateTime& clock, app_core::ClockData& out) 
       format_clock(clock, data);
       wifi_provision::set_clock(data);
 
-      if (!rtc_written || since_rtc_write_ms >= kRtcRefreshMs) {
+      // Real elapsed time, not a tick count: the wait below is no longer a
+      // fixed period, and a sync wake-up can cut it short.
+      const int64_t now_epoch = static_cast<int64_t>(std::time(nullptr));
+      if (!rtc_written ||
+          now_epoch - last_rtc_write_epoch >= kRtcRefreshSeconds) {
         if (write_rtc(clock)) {
           rtc_written = true;
-          since_rtc_write_ms = 0;
+          last_rtc_write_epoch = now_epoch;
         }
       }
     }
-    vTaskDelay(pdMS_TO_TICKS(kNetTimeCheckPeriodMs));
-    since_rtc_write_ms += kNetTimeCheckPeriodMs;
+    uint32_t wait_ms = 60'000;
+    if (net_time::synced()) {
+      timeval tv{};
+      gettimeofday(&tv, nullptr);
+      wait_ms = net_time::ms_until_next_minute(
+          static_cast<int64_t>(tv.tv_sec) * 1000 + tv.tv_usec / 1000);
+    }
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait_ms));
   }
 }
 
@@ -1781,9 +1799,13 @@ extern "C" void app_main() {
 
   // 3072 B: RTC-style date math and snprintf only, same shape as
   // battery_monitor_task - no TLS, no JSON, no large buffers.
+  // A sync that lands before the observer is registered is not lost: the task
+  // checks synced() at the top of its loop, so it publishes on its first pass.
   if (xTaskCreate(&net_time_monitor_task, "net_time_monitor", 3072, nullptr,
-                  tskIDLE_PRIORITY + 1, nullptr) != pdPASS) {
+                  tskIDLE_PRIORITY + 1, &g_net_time_monitor) != pdPASS) {
     ESP_LOGE(kTag, "net_time monitor task creation failed");
+  } else {
+    net_time::set_sync_observer(&wake_net_time_monitor);
   }
 
   // 16384 B: weather::refresh() itself puts an 8 KiB response buffer

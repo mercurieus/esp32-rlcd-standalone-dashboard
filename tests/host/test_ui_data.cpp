@@ -606,3 +606,8 @@ HOST_TEST(indoor_history_origin_is_the_oldest_slot_with_any_reading) {
   indoor.history[1].has_temperature = true;
   EXPECT_EQ(ui::indoor_history_origin(indoor), static_cast<std::size_t>(1));
 }
+
+HOST_TEST(clock_minute_index_flips_when_the_rtc_minute_does) {
+  EXPECT_EQ(ui::clock_minute_index(14'999, 45), 0u);   // 59.999 s on the RTC
+  EXPECT_EQ(ui::clock_minute_index(15'000, 45), 1u);   // :00 on the RTC
+}

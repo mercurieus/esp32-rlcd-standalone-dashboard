@@ -64,3 +64,13 @@ HOST_TEST(epoch_to_local_rolls_the_date_over_at_kyiv_winter_midnight) {
   EXPECT_EQ(after.minute, 0);
   EXPECT_EQ(after.second, 0);
 }
+
+// 1'699'999'980'000 is an exact minute boundary (60000 * 28'333'333).
+constexpr int64_t kBoundaryMs = 1'699'999'980'000;
+HOST_TEST(ms_until_next_minute_counts_to_the_next_boundary_plus_margin) {
+  EXPECT_EQ(net_time::ms_until_next_minute(kBoundaryMs + 40'000), 20'050u);
+  EXPECT_EQ(net_time::ms_until_next_minute(kBoundaryMs + 59'999), 51u);
+}
+HOST_TEST(ms_until_next_minute_on_an_exact_boundary_waits_a_whole_minute) {
+  EXPECT_EQ(net_time::ms_until_next_minute(kBoundaryMs), 60'050u);
+}

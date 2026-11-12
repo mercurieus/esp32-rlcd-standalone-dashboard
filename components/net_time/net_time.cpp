@@ -14,15 +14,23 @@ namespace net_time {
 namespace {
 
 constexpr char kTag[] = "net_time";
-constexpr char kNtpServer[] = "pool.ntp.org";
+constexpr char kNtpServerPrimary[] = "pool.ntp.org";
+constexpr char kNtpServerSecondary[] = "ua.pool.ntp.org";
 
 std::atomic<bool> g_synced{false};
+std::atomic<int64_t> g_last_sync_epoch{0};
+std::atomic<void (*)()> g_observer{nullptr};
 bool g_started = false;
 
-// esp_netif fires this on every resync, not just the first; only the
-// transition into synced is worth a log line.
+// esp_netif fires this on every resync, not just the first. Runs on the lwIP
+// thread, so the observer must stay cheap. The observer is called every time:
+// the consumer republishes the clock at once rather than waiting out its
+// minute timer. Only the transition into synced is worth a log line.
 void on_sync(struct timeval* tv) {
-  if (g_synced.exchange(true)) return;
+  g_last_sync_epoch.store(static_cast<int64_t>(tv->tv_sec));
+  const bool first = !g_synced.exchange(true);
+  if (void (*observer)() = g_observer.load()) observer();
+  if (!first) return;
   app_core::RtcDateTime decoded{};
   epoch_to_local(tv->tv_sec, decoded);
   ESP_LOGI(kTag, "NTP sync landed: %04u-%02u-%02u %02u:%02u:%02u local",
@@ -59,7 +67,8 @@ esp_err_t start() {
   setenv("TZ", kTimeZone, 1);
   tzset();
 
-  esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG(kNtpServer);
+  esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(
+      2, ESP_SNTP_SERVER_LIST(kNtpServerPrimary, kNtpServerSecondary));
   config.sync_cb = &on_sync;
   const esp_err_t result = esp_netif_sntp_init(&config);
   if (result != ESP_OK) {
@@ -80,6 +89,10 @@ esp_err_t start() {
 }
 
 bool synced() { return g_synced.load(); }
+
+int64_t last_sync_epoch() { return g_last_sync_epoch.load(); }
+
+void set_sync_observer(void (*observer)()) { g_observer.store(observer); }
 
 bool now(app_core::RtcDateTime& out) {
   if (!g_synced.load()) return false;

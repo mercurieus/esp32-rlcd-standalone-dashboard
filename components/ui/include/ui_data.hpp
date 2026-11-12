@@ -11,10 +11,19 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <string>
 
 namespace ui {
+
+// Which minute of the clock's life this is, counted from the instant of boot.
+// The boot clock rarely starts on :00, so counting whole minutes of uptime
+// would flip the minute at the wrong moment; adding the start second makes the
+// index tick exactly when the RTC-derived minute does.
+inline uint64_t clock_minute_index(uint64_t elapsed_ms, uint8_t start_second) {
+  return (elapsed_ms + static_cast<uint64_t>(start_second) * 1000) / 60000;
+}
 
 struct ChartPoint {
   int x = 0;

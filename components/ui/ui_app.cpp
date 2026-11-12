@@ -222,8 +222,13 @@ const char* weekday_name(const app_core::RtcDateTime& date) {
 }
 
 void update_clock(Runtime& runtime, uint64_t now_ms) {
+  // Counted from the boot clock's own second, so the index flips when the RTC
+  // minute does rather than a fraction of a minute off it.
   const uint64_t minute =
-      now_ms >= runtime.started_ms ? (now_ms - runtime.started_ms) / kMinuteMs : 0;
+      now_ms >= runtime.started_ms
+          ? clock_minute_index(now_ms - runtime.started_ms,
+                               runtime.initial_clock.second)
+          : 0;
   if (minute == runtime.last_clock_minute) return;
   runtime.last_clock_minute = minute;
   // Once net_time has published a real SNTP-synced clock (see

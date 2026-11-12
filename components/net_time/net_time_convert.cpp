@@ -13,4 +13,9 @@ void epoch_to_local(std::time_t epoch, app_core::RtcDateTime& out) {
   out.second = static_cast<uint8_t>(local.tm_sec);
 }
 
+uint32_t ms_until_next_minute(int64_t epoch_ms) {
+  const int64_t into_minute = ((epoch_ms % 60'000) + 60'000) % 60'000;
+  return static_cast<uint32_t>(60'000 - into_minute) + kMinuteMarginMs;
+}
+
 }  // namespace net_time
