@@ -68,12 +68,14 @@ void context_host_deleted(lv_event_t* event) {
   context->root = nullptr;
   context->clock_label = nullptr;
   context->date_label = nullptr;
+  context->sync_label = nullptr;
   context->network_icon = {};
   context->battery_icon_parts = {};
   clear_tray_indicator_icons(context->tray_indicator_icons);
   context->setup_status_label = nullptr;
   context->staging_clock_label = nullptr;
   context->staging_date_label = nullptr;
+  context->staging_sync_label = nullptr;
   context->staging_network_icon = {};
   context->staging_battery_icon = {};
   clear_tray_indicator_icons(context->staging_tray_indicator_icons);
@@ -212,12 +214,14 @@ bool init_context(UiContext& context, lv_obj_t* host) {
   context.root = nullptr;
   context.clock_label = nullptr;
   context.date_label = nullptr;
+  context.sync_label = nullptr;
   context.network_icon = {};
   context.battery_icon_parts = {};
   clear_tray_indicator_icons(context.tray_indicator_icons);
   context.setup_status_label = nullptr;
   context.staging_clock_label = nullptr;
   context.staging_date_label = nullptr;
+  context.staging_sync_label = nullptr;
   context.staging_network_icon = {};
   context.staging_battery_icon = {};
   clear_tray_indicator_icons(context.staging_tray_indicator_icons);
@@ -235,6 +239,7 @@ void reset_context(UiContext& context) {
   if (context.root != nullptr) {
     context.clock_label = nullptr;
     context.date_label = nullptr;
+    context.sync_label = nullptr;
     context.network_icon = {};
     context.battery_icon_parts = {};
     clear_tray_indicator_icons(context.tray_indicator_icons);
@@ -245,12 +250,14 @@ void reset_context(UiContext& context) {
   context.root = nullptr;
   context.clock_label = nullptr;
   context.date_label = nullptr;
+  context.sync_label = nullptr;
   context.network_icon = {};
   context.battery_icon_parts = {};
   clear_tray_indicator_icons(context.tray_indicator_icons);
   context.setup_status_label = nullptr;
   context.staging_clock_label = nullptr;
   context.staging_date_label = nullptr;
+  context.staging_sync_label = nullptr;
   context.staging_network_icon = {};
   context.staging_battery_icon = {};
   clear_tray_indicator_icons(context.staging_tray_indicator_icons);
@@ -558,6 +565,7 @@ lv_obj_t* render_page(UiContext& context,
   const Rect local_bounds{0, 0, bounds.width, bounds.height};
   context.staging_clock_label = nullptr;
   context.staging_date_label = nullptr;
+  context.staging_sync_label = nullptr;
   context.staging_network_icon = {};
   context.staging_battery_icon = {};
   clear_tray_indicator_icons(context.staging_tray_indicator_icons);
@@ -646,6 +654,7 @@ lv_obj_t* render_page(UiContext& context,
   if (context.root != nullptr && context.root != replacement) {
     context.clock_label = nullptr;
     context.date_label = nullptr;
+    context.sync_label = nullptr;
     context.network_icon = {};
     context.battery_icon_parts = {};
     clear_tray_indicator_icons(context.tray_indicator_icons);
@@ -655,6 +664,7 @@ lv_obj_t* render_page(UiContext& context,
   context.root = replacement;
   context.clock_label = context.staging_clock_label;
   context.date_label = context.staging_date_label;
+  context.sync_label = context.staging_sync_label;
   context.network_icon = context.staging_network_icon;
   context.battery_icon_parts = context.staging_battery_icon;
   for (int i = 0; i < app_core::kMaxTrayIndicators; ++i) {
@@ -663,6 +673,7 @@ lv_obj_t* render_page(UiContext& context,
   context.setup_status_label = context.staging_setup_status_label;
   context.staging_clock_label = nullptr;
   context.staging_date_label = nullptr;
+  context.staging_sync_label = nullptr;
   context.staging_network_icon = {};
   context.staging_battery_icon = {};
   clear_tray_indicator_icons(context.staging_tray_indicator_icons);
@@ -686,6 +697,11 @@ bool update_visible_clock(UiContext& context,
       clock_blink_text(format_minute_clock(snapshot.clock.hero),
                        context.clock_blink_visible)
           .c_str());
+  if (context.sync_label != nullptr) {
+    set_label_text_if_changed(
+        context.sync_label,
+        clock_trust_line(snapshot.clock, home_now_epoch()).c_str());
+  }
   return true;
 }
 

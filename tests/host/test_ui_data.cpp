@@ -5,6 +5,11 @@
 #include "test_support.hpp"
 
 #include <array>
+#include <cstdlib>
+#include <ctime>
+#include <string>
+
+#include "net_time_convert.hpp"
 
 namespace {
 
@@ -610,4 +615,73 @@ HOST_TEST(indoor_history_origin_is_the_oldest_slot_with_any_reading) {
 HOST_TEST(clock_minute_index_flips_when_the_rtc_minute_does) {
   EXPECT_EQ(ui::clock_minute_index(14'999, 45), 0u);   // 59.999 s on the RTC
   EXPECT_EQ(ui::clock_minute_index(15'000, 45), 1u);   // :00 on the RTC
+}
+
+namespace {
+// clock_trust_line() formats the sync time with localtime_r(), so the tests
+// pin the zone the device uses, the way test_net_time.cpp does.
+struct TrustTz {
+  TrustTz() {
+    setenv("TZ", net_time::kTimeZone, 1);
+    tzset();
+    ui::set_language(ui::Language::English);
+  }
+};
+
+app_core::ClockData synced_clock(const int64_t last_sync_epoch) {
+  app_core::ClockData clock;
+  clock.hero = "12:00";
+  clock.source = "SNTP";
+  clock.last_sync_epoch = last_sync_epoch;
+  return clock;
+}
+
+// 2024-06-15 12:34:56 UTC = 15:34:56 Kyiv summer time.
+constexpr int64_t kSyncAt = 1718454896;
+}  // namespace
+
+HOST_TEST(trust_line_reads_just_now_for_a_sync_under_a_minute_old) {
+  TrustTz tz;
+  EXPECT_EQ(ui::clock_trust_line(synced_clock(kSyncAt), kSyncAt + 30),
+            std::string("SYNCED JUST NOW"));
+}
+
+HOST_TEST(trust_line_counts_minutes_until_an_hour) {
+  TrustTz tz;
+  EXPECT_EQ(ui::clock_trust_line(synced_clock(kSyncAt), kSyncAt + 3 * 60),
+            std::string("SYNCED 3 MIN AGO"));
+  EXPECT_EQ(ui::clock_trust_line(synced_clock(kSyncAt), kSyncAt + 59 * 60 + 59),
+            std::string("SYNCED 59 MIN AGO"));
+}
+
+HOST_TEST(trust_line_shows_the_local_sync_time_from_an_hour) {
+  TrustTz tz;
+  EXPECT_EQ(ui::clock_trust_line(synced_clock(kSyncAt), kSyncAt + 60 * 60),
+            std::string("SYNCED 15:34"));
+}
+
+HOST_TEST(trust_line_warns_once_the_sync_is_a_day_old) {
+  TrustTz tz;
+  EXPECT_EQ(ui::clock_trust_line(synced_clock(kSyncAt), kSyncAt + 24 * 3600),
+            std::string("SYNC OLD 15:34"));
+  EXPECT_EQ(
+      ui::clock_trust_line(synced_clock(kSyncAt), kSyncAt + 24 * 3600 - 1),
+      std::string("SYNCED 15:34"));
+}
+
+HOST_TEST(trust_line_treats_a_sync_in_the_future_as_just_now) {
+  TrustTz tz;
+  EXPECT_EQ(ui::clock_trust_line(synced_clock(kSyncAt + 500), kSyncAt),
+            std::string("SYNCED JUST NOW"));
+}
+
+HOST_TEST(trust_line_keeps_the_rtc_and_unsynced_warnings) {
+  TrustTz tz;
+  app_core::ClockData clock;
+  clock.source = "PCF85063";
+  EXPECT_EQ(ui::clock_trust_line(clock, kSyncAt),
+            std::string(ui::text(ui::Text::ClockFromRtc)));
+  clock.source = "";
+  EXPECT_EQ(ui::clock_trust_line(clock, kSyncAt),
+            std::string(ui::text(ui::Text::ClockNotSynced)));
 }

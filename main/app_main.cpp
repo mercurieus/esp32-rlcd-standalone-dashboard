@@ -1427,6 +1427,7 @@ void format_clock(const app_core::RtcDateTime& clock, app_core::ClockData& out) 
     if (net_time::synced() && net_time::now(clock)) {
       app_core::ClockData data;
       format_clock(clock, data);
+      data.last_sync_epoch = net_time::last_sync_epoch();
       wifi_provision::set_clock(data);
 
       // Real elapsed time, not a tick count: the wait below is no longer a

@@ -22,6 +22,10 @@ struct ClockData {
   std::string hero;
   std::string date;
   std::string source;
+  // Unix seconds of the most recent SNTP sync; 0 = never. Carried in the
+  // snapshot (not read from net_time by the UI) so ui stays free of a
+  // net_time dependency and Home can say how stale the shown time is.
+  int64_t last_sync_epoch = 0;
 };
 
 // Register order is PCF85063 seconds, minutes, hours, day, weekday, month,

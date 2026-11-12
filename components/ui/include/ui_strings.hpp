@@ -89,6 +89,10 @@ enum class Text : uint16_t {
 
   ClockFromRtc,
   ClockNotSynced,
+  ClockSyncedJustNow,
+  ClockSyncedMinutesAgo,  // printf format: one %u
+  ClockSyncedAt,          // printf format: %02u:%02u
+  ClockSyncOld,           // printf format: %02u:%02u
 
   LanguageEnglish,
   LanguageTraditionalChinese,
