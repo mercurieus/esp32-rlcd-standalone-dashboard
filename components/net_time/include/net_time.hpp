@@ -20,4 +20,13 @@ bool synced();
 // is true.
 bool now(app_core::RtcDateTime& out);
 
+// Unix seconds of the most recent SNTP sync, 0 before the first. Lets the UI
+// say how stale the network time is.
+int64_t last_sync_epoch();
+
+// Called from the SNTP callback on every sync, on the lwIP thread: keep it to
+// something cheap like a task notification. Pass nullptr to clear. Register
+// before start() so the first sync cannot be missed.
+void set_sync_observer(void (*observer)());
+
 }  // namespace net_time

@@ -230,3 +230,7 @@ CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 # five minutes and can only place one in absolute time once the clock is known.
 # The sooner that happens after a boot, the less of the record is unanchored.
 CONFIG_LWIP_SNTP_MAXIMUM_STARTUP_DELAY=100
+
+# Two servers (pool.ntp.org, ua.pool.ntp.org): the default of 1 would silently
+# drop the second one passed to esp_netif_sntp_init().
+CONFIG_LWIP_SNTP_MAX_SERVERS=2
