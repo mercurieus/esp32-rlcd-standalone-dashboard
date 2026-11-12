@@ -86,6 +86,7 @@ add_executable(host_tests
     ../../components/app_core/carousel_controller.cpp
     ../../components/app_core/tray_registry.cpp
     ../../components/app_core/media_registry.cpp
+    ../../components/app_core/restart_hook.cpp
     ../../components/wifi_config/wifi_config.cpp
     ../../components/net_time/net_time_convert.cpp
     ../../components/weather/weather_parse.cpp

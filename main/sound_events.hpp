@@ -10,8 +10,8 @@
 // audio.hpp (modules/README.md rule 4); with CONFIG_AUDIO_ENABLE=n every play
 // below lands on the module's no-op stubs and nothing here needs an #ifdef.
 //
-// Nothing here blocks except play_farewell_blocking(), and that one never
-// waits for anything but its own melody: every other sound is
+// Nothing here blocks except play_farewell_blocking(), and that one waits for
+// nothing but its own melody and, at most 300 ms, a sound already playing: every other sound is
 // audio_play_notes_async(), refuse-if-busy. A sound requested while another
 // plays is dropped, not queued.
 namespace sound_events {
@@ -46,9 +46,11 @@ void on_button();
 bool allowed(app_core::SoundEvent event);
 
 // The falling farewell melody, played to completion on the calling task, for
-// right before a firmware-initiated esp_restart(). Never waits for the audio
-// module: if anything is already playing it returns at once, silent - a
-// restart must not be held up by a sound. Gated by the policy like the rest.
+// right before a firmware-initiated esp_restart(). Waits at most 300 ms for the
+// audio module (a button tick from the press that started an OTA accept is
+// still playing, and would otherwise always pre-empt it), then gives up
+// silent - a restart must not be held up by a sound. Gated by the policy like
+// the rest. Registered as app_core's before-restart hook.
 void play_farewell_blocking();
 
 }  // namespace sound_events

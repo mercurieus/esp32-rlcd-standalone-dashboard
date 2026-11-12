@@ -1,3 +1,4 @@
+#include "restart_hook.hpp"
 #include "sound_policy.hpp"
 
 #include "test_support.hpp"
@@ -139,4 +140,31 @@ HOST_TEST(battery_alarm_does_not_fire_on_the_first_reading_after_boot) {
   EXPECT_TRUE(!late.update(false, false, 0).has_value());
   EXPECT_TRUE(!late.update(true, false, 10).has_value());
   EXPECT_TRUE(!late.update(true, false, 9).has_value());
+}
+
+// The restart hook (spec section 6, "Farewell"): every firmware-initiated
+// esp_restart() runs app_core::run_before_restart() first, and that is where
+// the farewell melody is registered. What is decided here is only the hook's
+// own contract - once, and harmless when nothing is registered.
+namespace {
+int g_hook_calls = 0;
+void counting_hook() { ++g_hook_calls; }
+}  // namespace
+
+HOST_TEST(restart_hook_runs_once) {
+  g_hook_calls = 0;
+  app_core::set_before_restart_hook(&counting_hook);
+  app_core::run_before_restart();
+  EXPECT_EQ(g_hook_calls, 1);
+  // The OTA task and the portal's timer can both reach a restart; the second
+  // must not play the melody again.
+  app_core::run_before_restart();
+  EXPECT_EQ(g_hook_calls, 1);
+}
+
+HOST_TEST(restart_hook_without_registration_is_harmless) {
+  app_core::set_before_restart_hook(nullptr);
+  app_core::run_before_restart();
+  app_core::run_before_restart();
+  EXPECT_TRUE(true);
 }

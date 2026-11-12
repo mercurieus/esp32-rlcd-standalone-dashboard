@@ -6,6 +6,7 @@ idf_component_register(
         "carousel_controller.cpp"
         "tray_registry.cpp"
         "media_registry.cpp"
+        "restart_hook.cpp"
     INCLUDE_DIRS
         "include"
 )
