@@ -41,6 +41,7 @@ enum class Text : uint16_t {
   SettingsFirmware,
   SettingsLanguage,
   SettingsVolume,
+  SettingsQuietHours,
   SettingsCheckUpdates,
   SettingsWifiSetup,
   SettingsBattery,
@@ -50,6 +51,10 @@ enum class Text : uint16_t {
   VolumeLow,
   VolumeMedium,
   VolumeHigh,
+  QuietHoursOff,
+  QuietHours22To07,
+  QuietHours23To07,
+  QuietHours00To07,
   StatusCharging,
   StatusCollecting,
 

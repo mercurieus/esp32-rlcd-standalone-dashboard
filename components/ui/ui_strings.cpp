@@ -43,6 +43,7 @@ constexpr Row kRows[] = {
     {"Firmware", "韌體版本"},
     {"Language", "語言"},
     {"Volume", "音量"},
+    {"Quiet hours", "靜音時段"},
     {"Check for updates", "檢查更新"},
     {"Wi-Fi setup", "Wi-Fi 設定"},
     {"Battery", "電池"},
@@ -52,6 +53,10 @@ constexpr Row kRows[] = {
     {"Low", "低"},
     {"Medium", "中"},
     {"High", "高"},
+    {"Off", "關閉"},
+    {"22-07", "22-07"},
+    {"23-07", "23-07"},
+    {"00-07", "00-07"},
     {"Charging", "充電中"},
     {"Collecting", "收集中"},
 

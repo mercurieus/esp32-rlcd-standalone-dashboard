@@ -10,7 +10,7 @@
 // One button moves the cursor and there is no way to go back up, so a cursor
 // that stopped at the last row would be one you could never leave. Runtime,
 // Battery, and Firmware are display-only and deliberately skipped (see
-// settings_display_only_rows_cannot_be_focused below), so only the four
+// settings_display_only_rows_cannot_be_focused below), so only the five
 // actionable rows are expected to come back around.
 HOST_TEST(settings_cursor_wraps_so_every_focusable_item_stays_reachable) {
   ui::SettingsMenu menu;
@@ -24,8 +24,9 @@ HOST_TEST(settings_cursor_wraps_so_every_focusable_item_stays_reachable) {
     menu.focus_next();
     if (menu.focused() == first) break;
   }
-  // Language, Volume, WifiSetup, CheckUpdates - the four actionable rows.
-  EXPECT_EQ(static_cast<int>(visited.size()), 4);
+  // Language, Volume, QuietHours, WifiSetup, CheckUpdates - the five
+  // actionable rows.
+  EXPECT_EQ(static_cast<int>(visited.size()), 5);
   EXPECT_TRUE(menu.focused() == first);
 }
 
@@ -40,9 +41,9 @@ HOST_TEST(settings_cursor_wraps_so_every_focusable_item_stays_reachable) {
 HOST_TEST(settings_items_are_ordered_by_how_often_they_are_actually_used) {
   const ui::SettingsItem expected_order[] = {
       ui::SettingsItem::Language,     ui::SettingsItem::Volume,
-      ui::SettingsItem::WifiSetup,    ui::SettingsItem::CheckUpdates,
-      ui::SettingsItem::Runtime,      ui::SettingsItem::Battery,
-      ui::SettingsItem::Firmware,
+      ui::SettingsItem::QuietHours,   ui::SettingsItem::WifiSetup,
+      ui::SettingsItem::CheckUpdates, ui::SettingsItem::Runtime,
+      ui::SettingsItem::Battery,      ui::SettingsItem::Firmware,
   };
   static_assert(sizeof(expected_order) / sizeof(expected_order[0]) ==
                     ui::SettingsMenu::count(),
@@ -286,4 +287,76 @@ HOST_TEST(volume_preset_is_persisted_only_when_it_actually_changes) {
 
   ui::set_volume_preset_store_handler(nullptr);
   ui::set_volume_preset(ui::VolumePreset::Medium);
+}
+
+HOST_TEST(quiet_hours_23_to_07_wraps_midnight) {
+  using ui::QuietHoursPreset;
+  using ui::in_quiet_hours;
+  EXPECT_TRUE(in_quiet_hours(QuietHoursPreset::From23To07, 23));
+  EXPECT_TRUE(in_quiet_hours(QuietHoursPreset::From23To07, 0));
+  EXPECT_TRUE(in_quiet_hours(QuietHoursPreset::From23To07, 6));
+  EXPECT_TRUE(!in_quiet_hours(QuietHoursPreset::From23To07, 7));
+  EXPECT_TRUE(!in_quiet_hours(QuietHoursPreset::From23To07, 22));
+}
+
+HOST_TEST(quiet_hours_22_to_07_starts_an_hour_earlier) {
+  using ui::QuietHoursPreset;
+  EXPECT_TRUE(ui::in_quiet_hours(QuietHoursPreset::From22To07, 22));
+  EXPECT_TRUE(!ui::in_quiet_hours(QuietHoursPreset::From22To07, 21));
+  EXPECT_TRUE(!ui::in_quiet_hours(QuietHoursPreset::From22To07, 7));
+}
+
+HOST_TEST(quiet_hours_00_to_07_does_not_wrap) {
+  using ui::QuietHoursPreset;
+  EXPECT_TRUE(ui::in_quiet_hours(QuietHoursPreset::From00To07, 0));
+  EXPECT_TRUE(ui::in_quiet_hours(QuietHoursPreset::From00To07, 6));
+  EXPECT_TRUE(!ui::in_quiet_hours(QuietHoursPreset::From00To07, 7));
+  EXPECT_TRUE(!ui::in_quiet_hours(QuietHoursPreset::From00To07, 23));
+}
+
+HOST_TEST(quiet_hours_off_is_never_quiet) {
+  for (uint8_t hour = 0; hour < 24; ++hour) {
+    EXPECT_TRUE(!ui::in_quiet_hours(ui::QuietHoursPreset::Off, hour));
+  }
+}
+
+HOST_TEST(quiet_hours_default_is_23_to_07) {
+  EXPECT_TRUE(ui::quiet_hours_preset() == ui::QuietHoursPreset::From23To07);
+}
+
+HOST_TEST(quiet_hours_row_cycles_after_volume) {
+  ui::SettingsMenu menu;
+  EXPECT_TRUE(menu.focused() == ui::SettingsItem::Language);
+  menu.focus_next();
+  EXPECT_TRUE(menu.focused() == ui::SettingsItem::Volume);
+  menu.focus_next();
+  EXPECT_TRUE(menu.focused() == ui::SettingsItem::QuietHours);
+
+  ui::set_quiet_hours_preset(ui::QuietHoursPreset::Off);
+  EXPECT_TRUE(menu.activate() == ui::SettingsAction::QuietHoursChanged);
+  EXPECT_TRUE(ui::quiet_hours_preset() == ui::QuietHoursPreset::From22To07);
+  EXPECT_TRUE(menu.activate() == ui::SettingsAction::QuietHoursChanged);
+  EXPECT_TRUE(ui::quiet_hours_preset() == ui::QuietHoursPreset::From23To07);
+  EXPECT_TRUE(menu.activate() == ui::SettingsAction::QuietHoursChanged);
+  EXPECT_TRUE(ui::quiet_hours_preset() == ui::QuietHoursPreset::From00To07);
+  EXPECT_TRUE(menu.activate() == ui::SettingsAction::QuietHoursChanged);
+  EXPECT_TRUE(ui::quiet_hours_preset() == ui::QuietHoursPreset::Off);
+  ui::set_quiet_hours_preset(ui::QuietHoursPreset::From23To07);
+}
+
+static int g_quiet_stored = -1;
+static void remember_quiet(ui::QuietHoursPreset value) {
+  g_quiet_stored = static_cast<int>(value);
+}
+
+HOST_TEST(quiet_hours_store_handler_fires_only_on_change) {
+  ui::set_quiet_hours_preset(ui::QuietHoursPreset::From23To07);
+  ui::set_quiet_hours_store_handler(&remember_quiet);
+  g_quiet_stored = -1;
+  ui::set_quiet_hours_preset(ui::QuietHoursPreset::From23To07);
+  EXPECT_EQ(g_quiet_stored, -1);
+  ui::set_quiet_hours_preset(ui::QuietHoursPreset::Off);
+  EXPECT_EQ(g_quiet_stored, static_cast<int>(ui::QuietHoursPreset::Off));
+  ui::set_quiet_hours_store_handler(nullptr);
+  ui::set_quiet_hours_preset(ui::QuietHoursPreset::From23To07);
 }

@@ -26,6 +26,10 @@ enum class SettingsItem : uint8_t {
   // the spot, unlike WifiSetup/CheckUpdates below, which start something
   // that takes longer than one row press to finish.
   Volume,
+  // Cycles through QuietHoursPreset. Directly under Volume because the two
+  // are one idea - how loud, and when it must be silent - and are changed
+  // together far more often than either is changed alongside Wi-Fi setup.
+  QuietHours,
   WifiSetup,
   CheckUpdates,
   // Projected time left, from the persisted discharge history rather than
@@ -68,6 +72,7 @@ enum class SettingsAction : uint8_t {
   None,
   LanguageChanged,
   VolumeChanged,
+  QuietHoursChanged,
   StartUpdateCheck,
   // Install what the last check found. Same downloader, same ota::Session,
   // same progress and rollback path as a push from a machine on the network -
@@ -140,6 +145,29 @@ void set_volume_preset_store_handler(void (*handler)(VolumePreset value));
 // "Medium"/"High", unlike language_name() these do translate with the rest
 // of the UI, since they are not naming themselves the way a language does.
 const char* volume_preset_name(VolumePreset value);
+
+// When locally generated sound must stay silent. The window is a local
+// wall-clock range, so it only means something with a trusted clock; the
+// caller treats an untrusted clock as quiet (spec section 7), which is why
+// in_quiet_hours() takes an hour and not a time source. Default 23-07: the
+// hours a clock in a bedroom should not make a noise in.
+enum class QuietHoursPreset : uint8_t { Off, From22To07, From23To07, From00To07, Count };
+
+QuietHoursPreset quiet_hours_preset();
+
+// Notifies the store handler only on an actual change, like
+// set_volume_preset. Out-of-range values are ignored.
+void set_quiet_hours_preset(QuietHoursPreset value);
+
+void set_quiet_hours_store_handler(void (*handler)(QuietHoursPreset value));
+
+// Value-column text in the active language: "Off", "22-07", "23-07", "00-07".
+const char* quiet_hours_preset_name(QuietHoursPreset value);
+
+// True when local_hour (0-23) falls inside the preset's window. Every window
+// ends at 07:00 (exclusive); 22 and 23 wrap past midnight, 00 does not.
+// Off is never quiet.
+bool in_quiet_hours(QuietHoursPreset preset, uint8_t local_hour);
 
 class SettingsMenu {
  public:
