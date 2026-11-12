@@ -116,7 +116,8 @@ HOST_TEST(wifi_icon_switches_between_connected_and_disconnected_canvases_in_plac
   lv_obj_t* parent = fresh_parent();
   ui::WifiIconParts parts = ui::wifi_icon(
       parent,
-      {0, 0, app_core::kTrayIconSize, app_core::kTrayIconSize}, true);
+      {0, 0, app_core::kTrayIconSize, app_core::kTrayIconSize},
+      ui::WifiIconState::Connected, true);
 
   EXPECT_TRUE(parts.connected != nullptr);
   EXPECT_TRUE(parts.disconnected != nullptr);
@@ -128,7 +129,7 @@ HOST_TEST(wifi_icon_switches_between_connected_and_disconnected_canvases_in_plac
   EXPECT_EQ(lv_obj_get_style_opa(parts.disconnected, LV_PART_MAIN),
             static_cast<lv_opa_t>(LV_OPA_TRANSP));
 
-  ui::set_wifi_icon_state(parts, false);
+  ui::set_wifi_icon_state(parts, ui::WifiIconState::Off, true);
 
   EXPECT_TRUE(parts.connected == connected_canvas);
   EXPECT_TRUE(parts.disconnected == disconnected_canvas);
@@ -142,7 +143,8 @@ HOST_TEST(wifi_icon_uses_aligned_canvas_storage) {
   lv_obj_t* parent = fresh_parent();
   const ui::WifiIconParts parts = ui::wifi_icon(
       parent,
-      {0, 0, app_core::kTrayIconSize, app_core::kTrayIconSize}, true);
+      {0, 0, app_core::kTrayIconSize, app_core::kTrayIconSize},
+      ui::WifiIconState::Connected, true);
 
   EXPECT_TRUE(parts.connected != nullptr);
   EXPECT_TRUE(parts.disconnected != nullptr);

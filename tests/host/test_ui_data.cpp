@@ -115,6 +115,39 @@ HOST_TEST(clock_blinks_only_while_unset) {
   EXPECT_TRUE(ui::clock_blink_visible("RTC fallback", 1000));
 }
 
+HOST_TEST(wifi_icon_is_solid_when_connected) {
+  app_core::SetupData setup;
+  setup.connected = true;
+  EXPECT_TRUE(ui::wifi_icon_state(setup) == ui::WifiIconState::Connected);
+  EXPECT_TRUE(ui::wifi_icon_visible(ui::WifiIconState::Connected, 500));
+}
+
+HOST_TEST(wifi_icon_blinks_while_connecting) {
+  app_core::SetupData setup;
+  setup.connecting = true;
+  const ui::WifiIconState state = ui::wifi_icon_state(setup);
+  EXPECT_TRUE(state == ui::WifiIconState::Connecting);
+  EXPECT_TRUE(ui::wifi_icon_visible(state, 0));
+  EXPECT_TRUE(!ui::wifi_icon_visible(state, 500));
+  EXPECT_TRUE(ui::wifi_icon_visible(state, 1000));
+}
+
+HOST_TEST(wifi_icon_is_slashed_in_setup_or_unconfigured) {
+  app_core::SetupData setup;
+  setup.active = true;
+  EXPECT_TRUE(ui::wifi_icon_state(setup) == ui::WifiIconState::Off);
+  EXPECT_TRUE(ui::wifi_icon_visible(ui::WifiIconState::Off, 500));
+  EXPECT_TRUE(ui::wifi_icon_state(app_core::SetupData{}) ==
+              ui::WifiIconState::Off);
+}
+
+HOST_TEST(connected_wins_over_a_stale_connecting_flag) {
+  app_core::SetupData setup;
+  setup.connected = true;
+  setup.connecting = true;
+  EXPECT_TRUE(ui::wifi_icon_state(setup) == ui::WifiIconState::Connected);
+}
+
 HOST_TEST(clock_blink_text_hides_digits_but_keeps_the_colon) {
   EXPECT_EQ(ui::clock_blink_text("09:41", true), std::string("09:41"));
   EXPECT_EQ(ui::clock_blink_text("09:41", false),

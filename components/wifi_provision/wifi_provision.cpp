@@ -164,6 +164,7 @@ void apply_state_and_publish() {
 
   snapshot_.setup.active = (state == State::SetupAp);
   snapshot_.setup.connected = (state == State::Connected);
+  snapshot_.setup.connecting = (state == State::Connecting);
   snapshot_.setup.ap_ssid = ap_ssid_;
   snapshot_.setup.portal_password = portal_password_;
   snapshot_.setup.portal_url = ap_ssid_.empty() ? std::string{} : kPortalUrl;

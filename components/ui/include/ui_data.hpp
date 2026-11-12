@@ -991,6 +991,22 @@ inline bool clock_blink_visible(const std::string& source,
          (now_ms / kClockBlinkHalfPeriodMs) % 2 == 0;
 }
 
+// Connected wins over a stale connecting flag; setup mode never counts as
+// connected or connecting (the tray shows the slashed glyph there).
+inline WifiIconState wifi_icon_state(const app_core::SetupData& setup) {
+  if (setup.active) return WifiIconState::Off;
+  if (setup.connected) return WifiIconState::Connected;
+  if (setup.connecting) return WifiIconState::Connecting;
+  return WifiIconState::Off;
+}
+
+// Same 1 Hz phase as the clock blink; only Connecting ever hides.
+inline bool wifi_icon_visible(const WifiIconState state,
+                              const uint64_t now_ms) {
+  return state != WifiIconState::Connecting ||
+         (now_ms / kClockBlinkHalfPeriodMs) % 2 == 0;
+}
+
 // "09:41" with the digits recoloured white (invisible on the 1-bit panel's
 // white surface) and the colon left black. Recolouring rather than removing
 // the digits keeps every glyph's advance, so the colon never shifts - the
