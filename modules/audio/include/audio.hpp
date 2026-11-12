@@ -74,6 +74,15 @@ esp_err_t audio_play_notes(const Note* notes, size_t count);
 // ESP_ERR_INVALID_STATE if anything is already playing, never queued.
 esp_err_t audio_play_notes_async(const Note* notes, size_t count);
 
+// audio_play_notes() for a caller that must hear the sequence finish before
+// it moves on - the farewell melody right before esp_restart() - but must
+// never wait for anything else. Claims the same playback slot as the _async
+// forms with zero wait: ESP_ERR_INVALID_STATE at once if a tone, a sequence,
+// a sweep or a stream already holds it, never queued behind it. Otherwise
+// plays on the calling task, blocking for the sequence, and releases the
+// slot. Same argument checks as audio_play_notes().
+esp_err_t audio_try_play_notes_blocking(const Note* notes, size_t count);
+
 // 0-100. Applied immediately if the codec happens to be open (it normally
 // is not, between tones); otherwise stored and applied at the next
 // audio_play_tone(). Default is the volume documented next to
@@ -172,6 +181,10 @@ inline esp_err_t audio_play_notes(const Note* /*notes*/, size_t /*count*/) {
 }
 inline esp_err_t audio_play_notes_async(const Note* /*notes*/,
                                         size_t /*count*/) {
+  return ESP_ERR_NOT_SUPPORTED;
+}
+inline esp_err_t audio_try_play_notes_blocking(const Note* /*notes*/,
+                                               size_t /*count*/) {
   return ESP_ERR_NOT_SUPPORTED;
 }
 inline void audio_set_volume(int /*percent*/) {}

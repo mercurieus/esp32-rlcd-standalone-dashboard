@@ -999,6 +999,33 @@ esp_err_t audio_play_notes_async(const Note* notes, size_t count) {
   return ESP_OK;
 }
 
+esp_err_t audio_try_play_notes_blocking(const Note* notes, size_t count) {
+  if (g_codec_dev == nullptr) {
+    ESP_LOGW(kTag,
+             "audio_try_play_notes_blocking called before a successful audio_init()");
+    return ESP_ERR_INVALID_STATE;
+  }
+  // Same order as the async form: a bad sequence is a bad argument whether or
+  // not something else is playing, and never takes the slot.
+  if (!validate_notes(notes, count)) {
+    ESP_LOGW(kTag, "audio_try_play_notes_blocking: rejected a sequence of %u notes",
+             static_cast<unsigned>(count));
+    return ESP_ERR_INVALID_ARG;
+  }
+  // Zero-wait claim, not a blocking take: the caller is about to restart the
+  // chip, and a restart that waits on a stream of unknown length (or on a
+  // button tick that happens to be playing) is worse than a silent one. A
+  // stream holds this slot for its whole session, so this also refuses
+  // mid-stream; audio_play_notes() re-checks g_stream_open regardless.
+  if (!claim_playback_slot()) {
+    ESP_LOGW(kTag, "audio_try_play_notes_blocking refused: playback already in progress");
+    return ESP_ERR_INVALID_STATE;
+  }
+  const esp_err_t result = audio_play_notes(notes, count);
+  xSemaphoreGive(g_playback_busy);
+  return result;
+}
+
 esp_err_t audio_play_diagnostic_sweep_async(bool enable_amplifier) {
   if (g_codec_dev == nullptr) {
     ESP_LOGW(kTag,

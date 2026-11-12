@@ -447,12 +447,18 @@ sequence to keep correct, not two.
   `claim_playback_slot()` as `audio_play_tone_async()` and returns
   `ESP_ERR_INVALID_STATE` rather than queueing. While an AirPlay stream holds
   the codec both forms are refused, as tones are.
+- **Blocking, but never waiting: `audio_try_play_notes_blocking()`.** For the
+  farewell melody right before a firmware-initiated `esp_restart()`, which has
+  to finish before the chip resets. It claims the same slot with zero wait
+  (`ESP_ERR_INVALID_STATE` at once if anything holds it, stream included),
+  plays on the caller's task, and releases the slot. A restart that queued
+  behind a stream of unknown length would be worse than a silent one.
 - **Tray indicator.** Raised and cleared once around the whole sequence, in
   `write_sequence_step()`.
 - **`notes_duration_ms()`** (header-inline, `audio_notes.hpp`, no ESP-IDF
   dependency, defined even with `CONFIG_AUDIO_ENABLE=n`) sums the durations so
   a melody table can be `static_assert`-ed against the sound budget; it is
-  host-tested in `tests/host/test_audio_drain.cpp`. With audio off the two play
+  host-tested in `tests/host/test_audio_drain.cpp`. With audio off the play
   functions are inline stubs returning `ESP_ERR_NOT_SUPPORTED`.
 
 Not yet run on hardware: the multi-note window has built but not been heard.

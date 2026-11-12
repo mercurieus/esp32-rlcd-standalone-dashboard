@@ -57,6 +57,18 @@ void set_update_status(const std::string& status,
 // time this runs the menu has already committed to it.
 void set_volume_changed_handler(void (*handler)());
 
+// Runs on the LVGL thread once for every button press the UI acts on - page
+// navigation, the menu's moves and selections, the setup gesture, the update
+// prompt's yes/no - so main can play a soft tick (spec section 6). Presses
+// the UI swallows (while an OTA write owns the screen, or navigation while
+// the Setup page is up) do not report: a tick for a press that did nothing
+// would be a lie. The one accepted press that does not report either is the
+// one that changes the Volume row: it plays its own confirmation tone through
+// set_volume_changed_handler, and a tick ahead of it would hold the audio
+// module and get that tone refused as busy. Must return at once (start a
+// sound, never wait for one). Pass nullptr to unregister.
+void set_button_feedback_handler(void (*handler)());
+
 // Address-sensitive owner retained by the caller for the host's entire LVGL
 // lifetime. LVGL stores a pointer to this exact instance in the host delete
 // callback; initialize/reset it in place and never copy or move it.
