@@ -4,6 +4,7 @@
 
 #include "test_support.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <fstream>
 #include <sstream>
@@ -129,7 +130,11 @@ std::string read_file(const std::string& path) {
   if (!input) return {};
   std::ostringstream buffer;
   buffer << input.rdbuf();
-  return buffer.str();
+  // A checkout with core.autocrlf (Windows) turns the golden into CRLF; the
+  // emitted schema is LF. Line endings are not part of the contract.
+  std::string text = buffer.str();
+  text.erase(std::remove(text.begin(), text.end(), static_cast<char>(13)), text.end());
+  return text;
 }
 
 }  // namespace

@@ -159,11 +159,18 @@ HOST_TEST(new_york_fixture_is_distinct_from_taipei_weather) {
 HOST_TEST(indoor_fixture_has_non_flat_temperature_history) {
   const app_core::AppSnapshot snapshot =
       app_core::make_mock_snapshot(app_core::DemoScenario::UaFxSession);
-  EXPECT_EQ(snapshot.indoor.temperature_history_c,
-            (std::array<double, 8>{24.2, 24.3, 24.5, 24.6,
-                                   24.7, 24.8, 24.8, 24.8}));
-  EXPECT_TRUE(snapshot.indoor.temperature_history_c.front() !=
-              snapshot.indoor.temperature_history_c.back());
+  // Present points only: an absent slot is a gap in the line, not a reading.
+  std::size_t present = 0;
+  bool all_same = true;
+  double first = 0.0;
+  for (const auto& point : snapshot.indoor.history) {
+    if (!point.has_temperature) continue;
+    if (present == 0) first = point.temperature_c;
+    else if (point.temperature_c != first) all_same = false;
+    ++present;
+  }
+  EXPECT_TRUE(present >= 2);
+  EXPECT_TRUE(!all_same);
   const auto points = ui::normalize_chart_samples(
       std::array<int, 8>{242, 243, 245, 246, 247, 248, 248, 248},
       ui::Rect{0, 0, 80, 20});

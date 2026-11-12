@@ -8,37 +8,45 @@ option(HOST_DEMO_MISSING_PAGE "Hide the deterministic weather page" OFF)
 # common directory, so a linked worktree finds the same toolchain its parent
 # checkout does. Only cJSON is needed: the host tests parse the same JSON the
 # firmware does, against the same copy of the parser.
-file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../../.idf-version" IDF_VERSION)
-list(LENGTH IDF_VERSION IDF_VERSION_LINE_COUNT)
-if(NOT IDF_VERSION_LINE_COUNT EQUAL 1 OR
-   NOT IDF_VERSION MATCHES "^v[0-9]+\\.[0-9]+\\.[0-9]+$")
-    message(FATAL_ERROR ".idf-version must contain one vMAJOR.MINOR.PATCH line")
-endif()
+# A pre-set CJSON_DIR (-DCJSON_DIR=...) wins: a machine whose ESP-IDF is not the
+# workspace .tools copy (e.g. the eim-managed one on Windows) points straight at
+# its cJSON. Without it the lookup below is unchanged.
+if(NOT CJSON_DIR)
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../../.idf-version" IDF_VERSION)
+    list(LENGTH IDF_VERSION IDF_VERSION_LINE_COUNT)
+    if(NOT IDF_VERSION_LINE_COUNT EQUAL 1 OR
+       NOT IDF_VERSION MATCHES "^v[0-9]+\\.[0-9]+\\.[0-9]+$")
+        message(FATAL_ERROR ".idf-version must contain one vMAJOR.MINOR.PATCH line")
+    endif()
 
-get_filename_component(_project_dir "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
-execute_process(
-    COMMAND git -C "${_project_dir}" rev-parse --git-common-dir
-    RESULT_VARIABLE _common_dir_result
-    OUTPUT_VARIABLE _common_dir
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_VARIABLE _common_dir_error)
-if(NOT _common_dir_result EQUAL 0)
-    message(FATAL_ERROR
-        "cannot resolve Git common directory for ${_project_dir}: ${_common_dir_error}")
+    get_filename_component(_project_dir "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+    execute_process(
+        COMMAND git -C "${_project_dir}" rev-parse --git-common-dir
+        RESULT_VARIABLE _common_dir_result
+        OUTPUT_VARIABLE _common_dir
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_VARIABLE _common_dir_error)
+    if(NOT _common_dir_result EQUAL 0)
+        message(FATAL_ERROR
+            "cannot resolve Git common directory for ${_project_dir}: ${_common_dir_error}")
+    endif()
+    if(NOT IS_ABSOLUTE "${_common_dir}")
+        set(_common_dir "${_project_dir}/${_common_dir}")
+    endif()
+    get_filename_component(_main_checkout_dir "${_common_dir}/.." ABSOLUTE)
+    get_filename_component(_workspace_dir "${_main_checkout_dir}/.." ABSOLUTE)
+    set(_candidate
+        "${_workspace_dir}/.tools/esp-idf-${IDF_VERSION}/components/json/cJSON")
+    if(EXISTS "${_candidate}/cJSON.c")
+        set(CJSON_DIR "${_candidate}")
+    else()
+        message(FATAL_ERROR
+            "cJSON for ${IDF_VERSION} not found at ${_candidate}; "
+            "run ./scripts/bootstrap-idf.sh")
+    endif()
 endif()
-if(NOT IS_ABSOLUTE "${_common_dir}")
-    set(_common_dir "${_project_dir}/${_common_dir}")
-endif()
-get_filename_component(_main_checkout_dir "${_common_dir}/.." ABSOLUTE)
-get_filename_component(_workspace_dir "${_main_checkout_dir}/.." ABSOLUTE)
-set(_candidate
-    "${_workspace_dir}/.tools/esp-idf-${IDF_VERSION}/components/json/cJSON")
-if(EXISTS "${_candidate}/cJSON.c")
-    set(CJSON_DIR "${_candidate}")
-else()
-    message(FATAL_ERROR
-        "cJSON for ${IDF_VERSION} not found at ${_candidate}; "
-        "run ./scripts/bootstrap-idf.sh")
+if(NOT EXISTS "${CJSON_DIR}/cJSON.c")
+    message(FATAL_ERROR "cJSON.c not found in CJSON_DIR=${CJSON_DIR}")
 endif()
 
 
@@ -93,6 +101,12 @@ add_executable(host_tests
     ../../modules/airplay/tjpgd/tjpgd.c
     ${CJSON_DIR}/cJSON.c
 )
+# MinGW-w64 lacks setenv/localtime_r; the shim is force-included for this
+# target only, so the sources under test stay POSIX-clean.
+if(WIN32)
+    target_compile_options(host_tests PRIVATE
+        -include ${CMAKE_CURRENT_SOURCE_DIR}/esp_stubs/host_compat.h)
+endif()
 target_compile_definitions(host_tests PRIVATE
     GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/golden")
 
