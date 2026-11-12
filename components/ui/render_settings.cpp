@@ -17,6 +17,8 @@ std::string row_value(SettingsItem item, const app_core::BatteryData& battery,
       return language_name(ui::language());
     case SettingsItem::Volume:
       return volume_preset_name(ui::volume_preset());
+    case SettingsItem::QuietHours:
+      return quiet_hours_preset_name(ui::quiet_hours_preset());
     case SettingsItem::CheckUpdates:
       // No value of its own: the result of a check goes in the full-width row
       // below the list, because it is a sentence rather than a figure.

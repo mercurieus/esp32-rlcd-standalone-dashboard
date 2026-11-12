@@ -441,6 +441,44 @@ ui::VolumePreset load_volume_preset() {
   return static_cast<ui::VolumePreset>(stored);
 }
 
+constexpr char kQuietPresetKey[] = "quiet_preset";
+
+// Same shape as load_volume_preset(): any failure falls back to the
+// compiled-in default (23-07) rather than to Off, so a board with unreadable
+// NVS stays quiet at night instead of waking the house.
+ui::QuietHoursPreset load_quiet_hours_preset() {
+  if (nvs_flash_init() != ESP_OK) return ui::QuietHoursPreset::From23To07;
+  nvs_handle_t handle;
+  if (nvs_open(kUiNamespace, NVS_READONLY, &handle) != ESP_OK) {
+    return ui::QuietHoursPreset::From23To07;
+  }
+  uint8_t stored = 0;
+  const esp_err_t found = nvs_get_u8(handle, kQuietPresetKey, &stored);
+  nvs_close(handle);
+  if (found != ESP_OK ||
+      stored >= static_cast<uint8_t>(ui::QuietHoursPreset::Count)) {
+    return ui::QuietHoursPreset::From23To07;
+  }
+  ESP_LOGI(kTag, "quiet hours preset restored from NVS: %u", stored);
+  return static_cast<ui::QuietHoursPreset>(stored);
+}
+
+// Persistence only: quiet hours have no hardware side effect to apply.
+void store_quiet_hours_preset(ui::QuietHoursPreset value) {
+  nvs_handle_t handle;
+  if (nvs_open(kUiNamespace, NVS_READWRITE, &handle) != ESP_OK) {
+    ESP_LOGW(kTag, "quiet hours preset not saved: NVS unavailable");
+    return;
+  }
+  esp_err_t result = nvs_set_u8(handle, kQuietPresetKey,
+                                static_cast<uint8_t>(value));
+  if (result == ESP_OK) result = nvs_commit(handle);
+  nvs_close(handle);
+  if (result != ESP_OK) {
+    ESP_LOGW(kTag, "quiet hours preset not saved: %s", esp_err_to_name(result));
+  }
+}
+
 // Registered as ui::set_volume_preset_store_handler - persistence only, same
 // as store_language above, and for the same reason it is a separate handler
 // from apply_volume_preset_change below: this one also runs from the silent
@@ -1731,6 +1769,11 @@ extern "C" void app_main() {
   ui::set_volume_preset(load_volume_preset());
   ui::set_volume_preset_store_handler(&store_volume_preset);
   audio::audio_set_volume(ui::volume_preset_percent(ui::volume_preset()));
+
+  // Restored before the store handler is registered, so the restore itself
+  // writes nothing back to flash.
+  ui::set_quiet_hours_preset(load_quiet_hours_preset());
+  ui::set_quiet_hours_store_handler(&store_quiet_hours_preset);
 
   if (!ui::start(snapshot, clock, !rtc_ok)) {
     fatal_loop("UI lifecycle initialization failed", ESP_FAIL);

@@ -5,6 +5,8 @@ namespace {
 
 VolumePreset g_volume_preset = VolumePreset::Medium;
 void (*g_volume_preset_store)(VolumePreset) = nullptr;
+QuietHoursPreset g_quiet_hours_preset = QuietHoursPreset::From23To07;
+void (*g_quiet_hours_store)(QuietHoursPreset) = nullptr;
 
 // Runtime, Battery, and Firmware are display-only: activate() returns None
 // for all three (see below), so pressing select on one does nothing. That
@@ -54,6 +56,50 @@ const char* volume_preset_name(VolumePreset value) {
   return "";
 }
 
+QuietHoursPreset quiet_hours_preset() { return g_quiet_hours_preset; }
+
+void set_quiet_hours_preset(QuietHoursPreset value) {
+  if (value >= QuietHoursPreset::Count || value == g_quiet_hours_preset) return;
+  g_quiet_hours_preset = value;
+  if (g_quiet_hours_store != nullptr) g_quiet_hours_store(value);
+}
+
+void set_quiet_hours_store_handler(void (*handler)(QuietHoursPreset value)) {
+  g_quiet_hours_store = handler;
+}
+
+const char* quiet_hours_preset_name(QuietHoursPreset value) {
+  switch (value) {
+    case QuietHoursPreset::Off:
+      return text(Text::QuietHoursOff);
+    case QuietHoursPreset::From22To07:
+      return text(Text::QuietHours22To07);
+    case QuietHoursPreset::From23To07:
+      return text(Text::QuietHours23To07);
+    case QuietHoursPreset::From00To07:
+      return text(Text::QuietHours00To07);
+    case QuietHoursPreset::Count:
+      break;
+  }
+  return "";
+}
+
+bool in_quiet_hours(QuietHoursPreset preset, uint8_t local_hour) {
+  constexpr uint8_t kEnd = 7;
+  switch (preset) {
+    case QuietHoursPreset::From22To07:
+      return local_hour >= 22 || local_hour < kEnd;
+    case QuietHoursPreset::From23To07:
+      return local_hour >= 23 || local_hour < kEnd;
+    case QuietHoursPreset::From00To07:
+      return local_hour < kEnd;
+    case QuietHoursPreset::Off:
+    case QuietHoursPreset::Count:
+      break;
+  }
+  return false;
+}
+
 void SettingsMenu::focus_next() {
   // Bounded by count(): every non-focusable item skipped is one fewer than
   // count() possible stops, so this always finds the next focusable row
@@ -83,6 +129,13 @@ SettingsAction SettingsMenu::activate() {
       set_volume_preset(next);
       return SettingsAction::VolumeChanged;
     }
+    case SettingsItem::QuietHours: {
+      const auto next = static_cast<QuietHoursPreset>(
+          (static_cast<std::size_t>(ui::quiet_hours_preset()) + 1) %
+          static_cast<std::size_t>(QuietHoursPreset::Count));
+      set_quiet_hours_preset(next);
+      return SettingsAction::QuietHoursChanged;
+    }
     case SettingsItem::WifiSetup:
       return SettingsAction::EnterWifiSetup;
     case SettingsItem::CheckUpdates:
@@ -111,6 +164,8 @@ Text settings_item_label(SettingsItem item) {
       return Text::SettingsLanguage;
     case SettingsItem::Volume:
       return Text::SettingsVolume;
+    case SettingsItem::QuietHours:
+      return Text::SettingsQuietHours;
     case SettingsItem::WifiSetup:
       return Text::SettingsWifiSetup;
     case SettingsItem::CheckUpdates:
