@@ -75,6 +75,20 @@ inline constexpr uint8_t kBatteryRearmPercent = 20;
 // nothing and never fires.
 class BatteryAlarm {
  public:
+  // Gives an alarm back after update() spent it on a play that was refused
+  // only because the audio path was busy, so the next publish retries. A
+  // policy suppression (quiet hours, Volume Off, untrusted clock) is not
+  // handed back: that use-up is intended.
+  void rearm(SoundEvent event) {
+    // Critical spends the low alarm with it (see update()), so it gives both
+    // back.
+    if (event == SoundEvent::BatteryCritical) {
+      critical_armed_ = true;
+      low_armed_ = true;
+    }
+    if (event == SoundEvent::BatteryLow) low_armed_ = true;
+  }
+
   std::optional<SoundEvent> update(bool valid, bool charging, uint8_t percent) {
     if (!valid) return std::nullopt;
     if (!seen_valid_) {

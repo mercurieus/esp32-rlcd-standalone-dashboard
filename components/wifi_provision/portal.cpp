@@ -136,13 +136,25 @@ void report_ota_failure(const char* reason) {
   set_ota(data);
 }
 
-// Runs in the esp_timer task. The farewell melody blocks it for under 1 s
-// (a 300 ms wait for the playback slot at most, plus a melody under 1 s) right
-// before the restart - acceptable: the HTTP response has already drained (see
-// schedule_restart) and the chip is about to reset anyway.
-void restart_timer_fired(void*) {
+// Runs the farewell hook and restarts. Its own task, not the esp_timer task:
+// that task has a 3584 B stack, and the farewell melody opens the codec over
+// I2C, logs and builds tone vectors - more than that stack should be trusted
+// with. 6144 B in internal RAM (plain xTaskCreate), the same budget as the
+// httpd task. The task never returns: esp_restart() ends it.
+void restart_task(void*) {
   app_core::run_before_restart();
   esp_restart();
+}
+
+// Runs in the esp_timer task, so it does nothing but hand off. If the task
+// cannot be created the restart still happens, without the farewell - a
+// restart that never comes would strand an installed update.
+void restart_timer_fired(void*) {
+  if (xTaskCreate(&restart_task, "ota_restart", 6144, nullptr,
+                  tskIDLE_PRIORITY + 5, nullptr) != pdPASS) {
+    ESP_LOGE(kTag, "restart task creation failed; restarting without hook");
+    esp_restart();
+  }
 }
 
 // Rebooting inside the request handler drops the socket mid-response, so the
@@ -1012,7 +1024,13 @@ esp_err_t sound_post_handler(httpd_req_t* req) {
                         "Missing or too long ?event=.");
     return ESP_OK;
   }
-  const bool force = query_int(query, "force", 0) != 0;
+  // Strict: only the exact value "1" forces; "0", "true", "10" and an empty
+  // value all mean not forced.
+  char force_value[8] = {};
+  const bool force =
+      httpd_query_key_value(query, "force", force_value, sizeof(force_value)) ==
+          ESP_OK &&
+      std::strcmp(force_value, "1") == 0;
   if (g_sound_test_handler == nullptr) {
     httpd_resp_set_status(req, "503 Service Unavailable");
     httpd_resp_sendstr(req, "No sound handler registered.\n");

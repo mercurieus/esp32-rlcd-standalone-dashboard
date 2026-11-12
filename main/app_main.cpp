@@ -23,6 +23,7 @@
 #include "ota_session.hpp"
 #include "shtc3.hpp"
 #include "restart_hook.hpp"
+#include "tray_registry.hpp"
 #include "sound_events.hpp"
 #include "ui_app.hpp"
 #include "weather.hpp"
@@ -873,6 +874,9 @@ int g_battery_recent_next = 0;
 // while the cost of inventing one is an icon that is wrong for eleven
 // minutes. Graceful in one direction, not the other.
 constexpr int kCableStepMillivolts = 50;
+// How long after the speaker's tray indicator goes inactive a sample is still
+// distrusted: the cell takes a moment to recover from the amplifier's load.
+constexpr int64_t kAudioSettleMs = 1000;
 // The step's verdict outranks the slope for exactly as long as it takes the
 // slope window to refill with samples from after the event - written as the
 // window itself so the two cannot drift apart. After that the normal rule
@@ -968,7 +972,17 @@ int g_charge_offset_mv = 0;
         // it at the publish cadence would both blur it against 30 s of drift
         // and be unable to react any faster than the thing it is trying to
         // beat.
-        if (g_previous_tick_valid) {
+        // A sample taken while the speaker works (or just after) is not a
+        // reading of the cell: the amplifier's current dips the voltage and
+        // would read as an unplug and then a plug. Skip the comparison and
+        // drop the baseline, so the next clean sample is not measured against
+        // a dipped one either.
+        const bool audio_busy =
+            app_core::tray_any_active_within(kAudioSettleMs);
+        if (audio_busy) {
+          ESP_LOGD(kTag, "cable step check skipped: audio active or just ended");
+          g_previous_tick_valid = false;
+        } else if (g_previous_tick_valid) {
           const int step = slope_mv - g_previous_tick_mv;
           if (step >= kCableStepMillivolts || step <= -kCableStepMillivolts) {
             cable_event = true;
@@ -994,8 +1008,10 @@ int g_charge_offset_mv = 0;
             sound_events::on_cable_step(g_cable_step_charging, step);
           }
         }
-        g_previous_tick_mv = slope_mv;
-        g_previous_tick_valid = true;
+        if (!audio_busy) {
+          g_previous_tick_mv = slope_mv;
+          g_previous_tick_valid = true;
+        }
       } else {
         // No cell (or a reading nobody trusts) breaks the run of consecutive
         // samples the step is measured across. Without this, the first valid
@@ -1474,9 +1490,9 @@ void format_clock(const app_core::RtcDateTime& clock, app_core::ClockData& out) 
 // Publishes the network clock the moment a sync lands (the observer notifies
 // this task) and then on every real minute boundary, so the panel's minute
 // flips with the wall clock instead of up to a minute late. Before synced it
-// just re-checks every 60 s. Publishes only once synced; before that this does nothing at all, leaving
-// the RTC/compile-time fallback clock (and its own honest source string)
-// exactly as already set at startup.
+// just re-checks every 60 s. Publishes only once synced; before that it
+// publishes nothing, leaving the RTC/compile-time fallback clock (and its own
+// honest source string) exactly as already set at startup.
 [[noreturn]] void net_time_monitor_task(void*) {
   // Once on the first successful sync, then daily. The point is not to keep
   // the RTC in step second by second - it is to leave a trustworthy time in

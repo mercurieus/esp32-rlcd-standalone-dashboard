@@ -142,12 +142,14 @@ uint8_t local_hour() {
 // Starts a sound the policy has already allowed. Refused-if-busy is the
 // audio module's contract and an expected outcome (a tick during a chime is
 // simply lost), so it is a log line, not an error.
-void play_async(SoundEvent event, const audio::Note* notes, size_t count) {
+esp_err_t play_async(SoundEvent event, const audio::Note* notes,
+                     size_t count) {
   const esp_err_t result = audio::audio_play_notes_async(notes, count);
   if (result != ESP_OK) {
     ESP_LOGI(kTag, "%s sound did not play: %s", event_name(event),
              esp_err_to_name(result));
   }
+  return result;
 }
 
 }  // namespace
@@ -222,11 +224,14 @@ void on_battery(const app_core::BatteryData& battery) {
            event_name(*event), static_cast<unsigned>(battery.percent),
            battery.millivolts);
   if (!allowed(*event)) return;
-  if (*event == SoundEvent::BatteryCritical) {
-    play_async(*event, kFarewellMelody, std::size(kFarewellMelody));
-  } else {
-    play_async(*event, kBatteryLow, std::size(kBatteryLow));
-  }
+  const esp_err_t result =
+      *event == SoundEvent::BatteryCritical
+          ? play_async(*event, kFarewellMelody, std::size(kFarewellMelody))
+          : play_async(*event, kBatteryLow, std::size(kBatteryLow));
+  // Refused only because something else was playing: the alarm was never
+  // heard, so give it back and let the next publish try again. A policy
+  // suppression above returned before this point and stays used up.
+  if (result == ESP_ERR_INVALID_STATE) g_battery_alarm.rearm(*event);
 }
 
 void on_button() {

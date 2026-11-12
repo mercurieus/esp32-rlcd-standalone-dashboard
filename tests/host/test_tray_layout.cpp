@@ -321,3 +321,30 @@ HOST_TEST(tray_registry_slot_of_unregistered_index_is_safe_default) {
   const app_core::TrayIndicatorSlot negative = app_core::tray_indicator_slot(-1);
   EXPECT_TRUE(!negative.registered);
 }
+
+// --- tray_any_active_within(): "was the speaker just working?" ---------
+
+HOST_TEST(tray_activity_window_covers_active_and_the_grace_after) {
+  app_core::reset_tray_registry_for_test();
+  static const uint8_t kPixels[app_core::kTrayIconBitmapBytes] = {};
+  const auto handle = app_core::register_tray_indicator(
+      {kPixels, app_core::kTrayIconSize, app_core::kTrayIconSize,
+       app_core::kTrayIconBitmapBytes});
+  EXPECT_TRUE(handle.valid());
+
+  app_core::set_tray_clock_for_test(10'000);
+  EXPECT_TRUE(!app_core::tray_any_active_within(1000));  // never active
+
+  app_core::set_tray_indicator_active(handle, true);
+  app_core::set_tray_clock_for_test(15'000);
+  EXPECT_TRUE(app_core::tray_any_active_within(1000));  // still active
+
+  app_core::set_tray_indicator_active(handle, false);   // inactive at 15000
+  app_core::set_tray_clock_for_test(15'999);
+  EXPECT_TRUE(app_core::tray_any_active_within(1000));
+  app_core::set_tray_clock_for_test(16'000);
+  EXPECT_TRUE(!app_core::tray_any_active_within(1000));
+
+  app_core::set_tray_clock_for_test(-1);
+  app_core::reset_tray_registry_for_test();
+}
