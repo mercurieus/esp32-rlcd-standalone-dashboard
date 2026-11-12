@@ -87,6 +87,10 @@ constexpr Row kRows[] = {
 
     {"CLOCK FROM RTC", "時鐘來自 RTC"},
     {"CLOCK NOT SYNCED", "時鐘未同步"},
+    {"SYNCED JUST NOW", "剛剛同步"},
+    {"SYNCED %u MIN AGO", "%u 分鐘前同步"},
+    {"SYNCED %02u:%02u", "同步於 %02u:%02u"},
+    {"SYNC OLD %02u:%02u", "同步已過期 %02u:%02u"},
 
     {"English", "English"},
     {"Traditional Chinese", "繁體中文"},

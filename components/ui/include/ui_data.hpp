@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <ctime>
 #include <string>
 
 namespace ui {
@@ -934,6 +935,51 @@ inline Text clock_warning_text(const std::string& source) {
 // the way a retro digital clock flashes 12:00 after a power cut.
 inline bool clock_is_set(const std::string& source) {
   return source == "SNTP" || source == "PCF85063";
+}
+
+// Home's trust line: how far to believe the time on the panel.
+//   < 60 min   "SYNCED 3 MIN AGO" (under a minute: "SYNCED JUST NOW")
+//   >= 60 min  "SYNCED 14:05", the local time of day of the sync
+//   >= 24 h    "SYNC OLD 14:05", a warning rather than a fact
+// A sync stamped in the future (the wall clock was stepped back) reads as
+// just now rather than a negative age. Without a network sync the existing
+// RTC / not-synced warnings stand, since there is no sync time to show.
+// `now_epoch` is wall-clock Unix seconds; only consulted for source "SNTP".
+inline std::string clock_trust_line(const app_core::ClockData& clock,
+                                    const int64_t now_epoch) {
+  if (clock.source != "SNTP") {
+    return text(clock_warning_text(clock.source));
+  }
+  // Source says synced but no sync time was ever recorded: say so, do not
+  // invent an age.
+  if (clock.last_sync_epoch <= 0) return text(Text::ClockNotSynced);
+  const int64_t age = now_epoch - clock.last_sync_epoch;
+  char buffer[40];
+  if (age < 60) return text(Text::ClockSyncedJustNow);
+  if (age < 60 * 60) {
+    std::snprintf(buffer, sizeof(buffer), text(Text::ClockSyncedMinutesAgo),
+                  static_cast<unsigned>(age / 60));
+    return buffer;
+  }
+  const std::time_t when = static_cast<std::time_t>(clock.last_sync_epoch);
+  std::tm local{};
+#if defined(_WIN32)
+  localtime_s(&local, &when);
+#else
+  localtime_r(&when, &local);
+#endif
+  std::snprintf(buffer, sizeof(buffer),
+                text(age >= 24 * 60 * 60 ? Text::ClockSyncOld
+                                         : Text::ClockSyncedAt),
+                static_cast<unsigned>(local.tm_hour),
+                static_cast<unsigned>(local.tm_min));
+  return buffer;
+}
+
+// Wall-clock Unix seconds for the trust line. Only meaningful once SNTP has
+// set the system clock, which is the only case clock_trust_line reads it.
+inline int64_t home_now_epoch() {
+  return static_cast<int64_t>(std::time(nullptr));
 }
 
 // One blink cycle is 1 s: digits on for the first half, off for the second.

@@ -45,13 +45,12 @@ void render_home(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
   lv_obj_t* clock_label =
       label(parent, clock.c_str(), layout.hero, hero_font(), LV_TEXT_ALIGN_LEFT);
   if (context != nullptr) context->staging_clock_label = clock_label;
-  // Nothing at all when the clock is synced: a correct clock does not need to
-  // announce where it came from, and the row it frees is the space Home was
-  // spending on saying so.
-  const Text warning = clock_warning_text(snapshot.clock.source);
-  if (warning != Text::Count) {
-    label(parent, text(warning), layout.sync, row_font());
-  }
+  // Always drawn: a clock that is merely correct tells the reader nothing
+  // about whether it can be trusted, so Home says how fresh the sync is (or
+  // that there is none). The text is kept current by update_visible_clock().
+  const std::string trust = clock_trust_line(snapshot.clock, home_now_epoch());
+  lv_obj_t* sync_label = label(parent, trust.c_str(), layout.sync, row_font());
+  if (context != nullptr) context->staging_sync_label = sync_label;
 
   render_right_tiles(parent, snapshot, layout.tile);
 }

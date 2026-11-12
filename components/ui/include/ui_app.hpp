@@ -89,6 +89,9 @@ struct UiContext {
   // The date the tray shows: Home's full date, or the short one beside the
   // time elsewhere. Held only so it can blink while the clock is unset.
   lv_obj_t* date_label = nullptr;
+  // Home's trust line ("SYNCED 3 MIN AGO"). Held so the minute rollover can
+  // rewrite its text in place instead of rebuilding the page.
+  lv_obj_t* sync_label = nullptr;
   // Blink state for update_clock_blink. The applied_* pointers are which
   // widgets the current phase was last pushed to, so a page swap (fresh
   // widgets, plain text) gets the phase re-applied even mid-phase. Compared,
@@ -113,6 +116,7 @@ struct UiContext {
   // Staging-only registrations used during atomic replacement.
   lv_obj_t* staging_clock_label = nullptr;
   lv_obj_t* staging_date_label = nullptr;
+  lv_obj_t* staging_sync_label = nullptr;
 
   lv_obj_t* staging_setup_status_label = nullptr;
   bool initialized = false;
