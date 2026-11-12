@@ -25,7 +25,9 @@ inline constexpr int kCanvasHeight = 300;
 inline constexpr int kSafeMargin = 6;
 inline constexpr int kSeparatorWidth = 1;
 inline constexpr uint32_t kNavigationOverlayDurationMs = 2'000;
-inline constexpr int kTileContentHeight = 76;  // 24 title + 34 value + 18 detail
+// 24 title + 34 value + 24 detail - see the row constants below, which a
+// static_assert holds this to.
+inline constexpr int kTileContentHeight = 82;
 inline constexpr int kTileInset = 6;
 inline constexpr int kTextStrokeWidth = 1;
 inline constexpr int kTextInset = 1;
@@ -115,19 +117,32 @@ constexpr std::array<Rect, 3> right_tile_cells(const Rect bounds) {
             bounds.height - 2 * (cell_height + kSeparatorWidth)}}};
 }
 
-constexpr Rect tile_content_rect(const Rect cell) {
-  return {cell.x + kTileInset,
-          cell.y + (cell.height - kTileContentHeight) / 2,
-          cell.width - 2 * kTileInset, kTileContentHeight};
+constexpr int safe_text_box_height(const int requested_height,
+                                   const int font_line_height) {
+  const int stroke_safe_height = font_line_height + 2 * kTextInset;
+  return requested_height > stroke_safe_height ? requested_height
+                                                : stroke_safe_height;
 }
 
-// Title 24, value 34, detail 18. The title used to be the smallest row on the
+// Title 24, value 34, detail 24. The title used to be the smallest row on the
 // tile, which read as a caption under a number rather than a heading over one;
 // at font 20 it is a heading. The value grows with it so the reading still
 // dominates - equal sizes would remove the hierarchy rather than fix it.
 inline constexpr int kTileTitleHeight = 24;
 inline constexpr int kTileValueHeight = 34;
-inline constexpr int kTileDetailHeight = 18;
+// The detail row carries a reading in montserrat_20 now ("~-24°C", "55%",
+// "+0.12%"), with its words in montserrat_14 on the same baseline, so it is
+// sized for the larger face: line height 22 plus the 1 px stroke inset either
+// side, 24. It was 18, a 14 px row, and a 20 px value in it would have been
+// clipped by label()'s own safe_text_box_height growing the box past the row.
+// Literal 22 rather than kSetupMediumFontLineHeight, which lives in
+// ui_data.hpp - this header compiles first.
+inline constexpr int kTileDetailFontLineHeight = 22;  // lv_font_montserrat_20
+inline constexpr int kTileDetailHeight =
+    safe_text_box_height(18, kTileDetailFontLineHeight);
+static_assert(kTileContentHeight ==
+                  kTileTitleHeight + kTileValueHeight + kTileDetailHeight,
+              "kTileContentHeight is the three text rows, nothing else");
 // The detail row sits this far below the value row rather than directly
 // under it, which is what keeps it clear of the leading visual.
 //
@@ -137,11 +152,32 @@ inline constexpr int kTileDetailHeight = 18;
 // detail past the visual was the other option and does not fit, leaving
 // 108px for a line that needs up to 149.
 //
-// 14px, from the 16px the content block leaves unused at the bottom of a
-// 108px Home tile. The content rect itself is untouched, so the block stays
-// centred and tile_content_is_centered keeps meaning what it says; only this
-// last row reaches into the margin below it, and 2px of that margin is left.
+// This and kTileValueHeight together are the icon's 48 px - neither is where
+// the detail row's extra height came from.
 inline constexpr int kTileDetailDrop = 14;
+
+// Everything a tile draws, top of the title to bottom of the detail: the three
+// rows plus the drop, 96 px. This, not kTileContentHeight, is what is centred
+// in the cell.
+//
+// It used to be the 76 px of rows alone that was centred, with the drop left
+// to hang out of the bottom of the block into the cell's margin: 16 px above
+// the title, 2 below the detail in a 108 px Home tile. That worked only while
+// the margin outlasted the drop. Growing the detail row by 6 px for a 20 px
+// reading would have put its bottom 4 px past the cell - past Home's content
+// area, the one thing home_layout_fits and the "same content area as every
+// carousel page" static_assert both forbid - so there was no room to take
+// "from below" the tile without breaking them. Centring the whole block
+// instead puts 6 px above and 6 below, keeps every row inside the cell, and
+// leaves the icon and the value row exactly as they were.
+inline constexpr int kTileBlockHeight = kTileContentHeight + kTileDetailDrop;
+
+constexpr Rect tile_content_rect(const Rect cell) {
+  return {cell.x + kTileInset,
+          cell.y + (cell.height - kTileBlockHeight) / 2,
+          cell.width - 2 * kTileInset, kTileBlockHeight};
+}
+
 constexpr TileTextLayout tile_text_layout(const Rect cell) {
   const Rect content = tile_content_rect(cell);
   return {{cell.x + kTileInset, content.y, cell.width - 2 * kTileInset,
@@ -210,13 +246,6 @@ constexpr bool tile_content_is_centered(const Rect cell) {
                         ? content_center - cell_center
                         : cell_center - content_center;
   return delta <= 2;
-}
-
-constexpr int safe_text_box_height(const int requested_height,
-                                   const int font_line_height) {
-  const int stroke_safe_height = font_line_height + 2 * kTextInset;
-  return requested_height > stroke_safe_height ? requested_height
-                                                : stroke_safe_height;
 }
 
 constexpr int text_outline_width(const int font_line_height) {

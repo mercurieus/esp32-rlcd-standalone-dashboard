@@ -57,19 +57,61 @@ HOST_TEST(rlcd_outline_is_limited_to_small_text) {
   EXPECT_EQ(ui::text_outline_width(52), 0);
 }
 
-HOST_TEST(right_tile_text_rows_do_not_overlap_and_fill_the_cell) {
-  const ui::Rect cell{280, 28, 108, 91};
-  const ui::TileTextLayout rows = ui::tile_text_layout(cell);
+// Every cell a tile is actually drawn into: Home's tile row whole and split in
+// two, and the market page's side column whole and split in two. Derived from
+// the layout functions rather than written as literals - this test used to
+// hold {280, 28, 108, 91}, a cell of the retired three-tile sidebar
+// (right_tile_cells over a 276 px column) that no page has drawn since the
+// tiles moved to Home, and it went on failing against a layout nobody sees
+// while saying nothing about the ones people do.
+static std::array<ui::Rect, 6> drawn_tile_cells() {
+  const ui::Rect home_row =
+      ui::home_layout(ui::content_bounds(ui::safe_canvas(),
+                                         app_core::PageId::Home))
+          .tile;
+  const ui::Rect side =
+      ui::market_layout(ui::content_bounds(ui::safe_canvas(),
+                                           app_core::PageId::UaFx))
+          .side;
+  return {{ui::home_tile_column(home_row, 0, 1),
+           ui::home_tile_column(home_row, 0, 2),
+           ui::home_tile_column(home_row, 1, 2),
+           ui::stacked_tile_cell(side, 0, 1),
+           ui::stacked_tile_cell(side, 0, 2),
+           ui::stacked_tile_cell(side, 1, 2)}};
+}
 
-  EXPECT_TRUE(rows.title.y >= cell.y);
-  EXPECT_TRUE(rows.title.bottom() <= rows.value.y);
-  EXPECT_TRUE(rows.value.bottom() <= rows.detail.y);
-  EXPECT_TRUE(rows.detail.bottom() <= cell.bottom());
-  EXPECT_TRUE(ui::tile_content_is_centered(cell));
-  const int top_gap = rows.title.y - cell.y;
-  const int bottom_gap = cell.bottom() - rows.detail.bottom();
-  EXPECT_TRUE(top_gap == bottom_gap || top_gap + 1 == bottom_gap ||
-              top_gap == bottom_gap + 1);
+HOST_TEST(right_tile_text_rows_do_not_overlap_and_fill_the_cell) {
+  for (const ui::Rect cell : drawn_tile_cells()) {
+    const ui::TileTextLayout rows = ui::tile_text_layout(cell);
+
+    EXPECT_TRUE(rows.title.y >= cell.y);
+    EXPECT_TRUE(rows.title.bottom() <= rows.value.y);
+    EXPECT_TRUE(rows.value.bottom() <= rows.detail.y);
+    EXPECT_TRUE(rows.detail.bottom() <= cell.bottom());
+    EXPECT_TRUE(ui::tile_content_is_centered(cell));
+    const int top_gap = rows.title.y - cell.y;
+    const int bottom_gap = cell.bottom() - rows.detail.bottom();
+    EXPECT_TRUE(top_gap == bottom_gap || top_gap + 1 == bottom_gap ||
+                top_gap == bottom_gap + 1);
+  }
+}
+
+// The detail row holds a 20 px reading now (montserrat_20, line height 22),
+// so it needs that font's stroke-safe box - and it must get it without
+// cutting into the leading icon's box above it or leaving the cell below.
+HOST_TEST(tile_detail_row_fits_a_20px_reading) {
+  for (const ui::Rect cell : drawn_tile_cells()) {
+    const ui::TileTextLayout rows = ui::tile_text_layout(cell);
+    const ui::Rect icon = ui::tile_leading_visual_rect(cell, true);
+    EXPECT_TRUE(rows.detail.height >=
+                ui::safe_text_box_height(18, ui::kSetupMediumFontLineHeight));
+    EXPECT_TRUE(ui::rect_within(cell, rows.detail));
+    EXPECT_TRUE(rows.detail.y >= icon.bottom());
+    // The icon box is not what paid for it: still the large face's 60x48.
+    EXPECT_EQ(icon.width, 60);
+    EXPECT_EQ(icon.height, 48);
+  }
 }
 
 HOST_TEST(right_tile_leading_visual_never_crosses_the_value_text) {

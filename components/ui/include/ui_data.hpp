@@ -1521,6 +1521,154 @@ constexpr Rect home_tile_cell(const Rect column, int index, int count) {
   return stacked_tile_cell(column, index, count);
 }
 
+// A tile's detail line, split by what each piece is, because the pieces are no
+// longer one size. The reading (`value`) is set in font_medium() (20 px) so it
+// can be read from across a room; the words around it stay in font_small()
+// (14 px) on the same baseline - see tile() in render_shared.cpp.
+//
+//   prefix  "ALERT  " or empty                        14 px, always drawn
+//   caption the condition word, "RH", a battery word  14 px, gives way first
+//   value   "~-24°C", "55%", "+0.12%"                 20 px, never reduced
+//   suffix  " OLD" or empty                           14 px, always drawn
+//
+// The worst case a half-width Home tile has to hold is the weather line
+// "ALERT  Snow Showers ~-24°C OLD" - see fit_detail_caption below for what
+// happens to it.
+struct DetailParts {
+  std::string prefix;
+  std::string caption;
+  std::string value;
+  std::string suffix;
+};
+
+enum class CaptionFit : uint8_t { Full, Ellipsised, Dropped };
+
+// The 2 px between the caption and the reading. Each part is its own label and
+// each label pads its text by kTextInset either side, so neighbouring texts
+// already sit 2 px apart; this makes the caption-to-value gap 4 px, the width
+// of a 14 px space (3.8 px), which is what the single-string line used.
+inline constexpr int kTileDetailPartGap = 2;
+
+// The narrowest an ellipsised caption is still worth drawing, in the same slot
+// convention as fit_detail_caption's widths (text + both label insets + the
+// gap to the value): "Sno..." is 36.7 px at montserrat_14, so 37 + 2 + 2.
+// Under that the word cannot be recognised and the slot goes to nothing.
+inline constexpr int kTileDetailMinCaptionPx = 41;
+
+// When the detail line does not fit, the caption is what gives way - the
+// spec's rule: a reading, the stale marker and the alert always render, and a
+// condition word is the only part the reader can do without.
+//
+// Every width is a slot: the part's measured text width plus whatever padding
+// the renderer puts around it, so the sum is exactly the width the row needs.
+// An empty part is 0. `box_px` is the detail row's width.
+//
+//   Full        - everything fits as it is (or there is no caption to cut);
+//   Ellipsised  - the caption gets box - prefix - value - suffix, which is at
+//                 least min_caption_px;
+//   Dropped     - not even that: draw the other three without it.
+//
+// Measured (scripts/measure-text.py, slot widths as above) for a half-width
+// Home tile, whose detail row is 178 px:
+//   "Snow Showers ~-24°C"             109 + 69           = 178  Full
+//   ... + " OLD"                      + 38               = 216  Ellipsised (71)
+//   "ALERT  " + ... + " OLD"          + 56               = 272  Dropped (15)
+// A full-width tile (376 px) holds the whole worst case, 272 px.
+constexpr CaptionFit fit_detail_caption(const int prefix_px,
+                                        const int caption_px,
+                                        const int value_px,
+                                        const int suffix_px, const int box_px,
+                                        const int min_caption_px) {
+  if (caption_px <= 0) return CaptionFit::Full;
+  const int fixed = prefix_px + value_px + suffix_px;
+  if (fixed + caption_px <= box_px) return CaptionFit::Full;
+  if (box_px - fixed >= min_caption_px) return CaptionFit::Ellipsised;
+  return CaptionFit::Dropped;
+}
+
+// The longest stem of `text` that fits `max_px` with "..." after it, or empty
+// if not even one character does. `measure` returns a string's drawn width in
+// pixels - lv_text_get_size on the panel, anything on the host.
+//
+// Done by hand rather than left to LV_LABEL_LONG_DOT because that mode works by
+// wrapping and then dotting the last visible line, so a two-word caption in a
+// narrow box breaks at the space first and comes out as "S..." where
+// "Snow S..." would have fitted. Cuts on UTF-8 code point boundaries, and
+// never leaves a space in front of the dots.
+template <typename Measure>
+std::string ellipsise_to_width(const std::string& text, const int max_px,
+                               Measure measure) {
+  if (measure(text) <= max_px) return text;
+  std::string stem = text;
+  while (!stem.empty()) {
+    std::size_t cut = stem.size() - 1;
+    while (cut > 0 &&
+           (static_cast<unsigned char>(stem[cut]) & 0xC0) == 0x80) {
+      --cut;
+    }
+    stem.erase(cut);
+    while (!stem.empty() && stem.back() == ' ') stem.pop_back();
+    if (stem.empty()) break;
+    std::string candidate = stem + "...";
+    if (measure(candidate) <= max_px) return candidate;
+  }
+  return {};
+}
+
+// The detail line of a Home tile of the given kind, as parts. Pure, so the
+// worst case is a host test rather than something only the panel shows.
+inline DetailParts home_tile_detail_parts(const app_core::AppSnapshot& snapshot,
+                                          const HomeTileKind kind) {
+  DetailParts parts;
+  char buffer[24] = "";
+  switch (kind) {
+    case HomeTileKind::Battery:
+      // A word, not a reading: it stays a 14 px caption.
+      parts.caption = snapshot.battery.overvoltage_warning
+                          ? text(Text::StatusOvervoltage)
+                          : text(Text::StatusLowBattery);
+      break;
+    case HomeTileKind::Weather:
+      // Condition, then what it feels like - the two things the bare number
+      // above does not say. has_feels_like rather than a sentinel: a provider
+      // that omits the field must show nothing, and 0.0 C is an ordinary
+      // reading.
+      //
+      // "~-24°C", not "FEELS -24°C": the spelled-out caption needs 189 px of
+      // the 176 a half-width tile leaves even at 14 px. The weather page still
+      // spells it out, where there is room to.
+      if (snapshot.weather.alert) parts.prefix = text(Text::StatusAlert);
+      parts.caption = snapshot.weather.current.condition;
+      if (snapshot.weather.current.has_feels_like) {
+        parts.value =
+            "~" + temperature_text(
+                      static_cast<float>(snapshot.weather.current.feels_like_c),
+                      0);
+      }
+      if (snapshot.weather.stale) parts.suffix = text(Text::StaleSuffix);
+      break;
+    case HomeTileKind::Market:
+      // has_change can be false on the rare refresh with no honest change
+      // figure; the line is then left blank rather than a fabricated
+      // "+0.00%".
+      if (snapshot.ua_fx.has_change) {
+        std::snprintf(buffer, sizeof(buffer), "%+.2f%%",
+                      snapshot.ua_fx.primary_change_percent);
+        parts.value = buffer;
+      }
+      break;
+    case HomeTileKind::Indoor:
+      parts.caption = "RH";
+      std::snprintf(buffer, sizeof(buffer), "%u%%",
+                    static_cast<unsigned>(snapshot.indoor.humidity_percent));
+      parts.value = buffer;
+      break;
+    case HomeTileKind::None:
+      break;
+  }
+  return parts;
+}
+
 // Highest and lowest of the intraday series. Only meaningful when the provider
 // actually supplied one - a daily-close source repeats its close, and a range
 // of zero drawn as a range would read as "the market did not move".
@@ -2074,6 +2222,14 @@ static_assert(
     home_layout(content_bounds(safe_canvas(), app_core::PageId::Home))
             .hero.height >= kHomeHeroFontLineHeight,
     "the clock hero box is at least as tall as the hero font's line height");
+static_assert(
+    home_layout(content_bounds(safe_canvas(), app_core::PageId::Home))
+            .tile.height >= kTileBlockHeight,
+    "Home's tile row holds a whole tile - title, value, drop and the 20 px "
+    "detail row - so tile_text_layout never draws past it");
+static_assert(kTileDetailFontLineHeight == kSetupMediumFontLineHeight,
+              "the tile detail row is sized for the same montserrat_20 every "
+              "other medium row uses");
 
 // ---------------------------------------------------------------------------
 // Now Playing page

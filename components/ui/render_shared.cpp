@@ -154,6 +154,89 @@ void assert_tree_in_safe_canvas(lv_obj_t* object, int page) {
 }
 #endif
 
+int text_width(const char* text, const lv_font_t* font) {
+  lv_point_t size{};
+  lv_text_get_size(&size, text, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+  return static_cast<int>(size.x);
+}
+
+// A tile's detail line: the words in small_font() (14 px) and the reading in
+// medium_font() (20 px), one label per part, sat on one baseline and centred
+// as a group in `row`. See DetailParts and fit_detail_caption in ui_data.hpp
+// for what the parts are and which gives way.
+//
+// Each label is exactly its text's measured width plus label()'s 1 px inset
+// either side, and the labels abut rather than overlap: label() paints an
+// opaque white background, so an overlapping box would wipe the edge of the
+// glyph next to it.
+void tile_detail(lv_obj_t* parent, const DetailParts& parts, const Rect row) {
+  const lv_font_t* words = small_font();
+  const lv_font_t* reading = medium_font();
+  // Baselines meet when the small box starts this much lower: each label's
+  // text starts kTextInset below its box top, and its baseline is
+  // line_height - base_line below that. montserrat_20 is 22/4 and
+  // montserrat_14 is 16/3, so 18 - 13 = 5.
+  const int words_drop = (reading->line_height - reading->base_line) -
+                         (words->line_height - words->base_line);
+  const int pad = 2 * kTextInset;
+  const auto slot = [pad](const std::string& part, const lv_font_t* font) {
+    return part.empty() ? 0 : text_width(part.c_str(), font) + pad;
+  };
+  const int gap = parts.value.empty() ? 0 : kTileDetailPartGap;
+  const int prefix_px = slot(parts.prefix, words);
+  const int value_px = slot(parts.value, reading);
+  const int suffix_px = slot(parts.suffix, words);
+  const int caption_px =
+      parts.caption.empty() ? 0 : slot(parts.caption, words) + gap;
+
+  std::string caption = parts.caption;
+  switch (fit_detail_caption(prefix_px, caption_px, value_px, suffix_px,
+                             row.width, kTileDetailMinCaptionPx)) {
+    case CaptionFit::Full:
+      break;
+    case CaptionFit::Ellipsised:
+      caption = ellipsise_to_width(
+          caption, row.width - prefix_px - value_px - suffix_px - pad - gap,
+          [words](const std::string& s) { return text_width(s.c_str(), words); });
+      break;
+    case CaptionFit::Dropped:
+      caption.clear();
+      break;
+  }
+
+  struct Piece {
+    const std::string* text;
+    const lv_font_t* font;
+  };
+  const Piece pieces[] = {{&parts.prefix, words},
+                          {&caption, words},
+                          {&parts.value, reading},
+                          {&parts.suffix, words}};
+  int widths[4] = {};
+  int total = 0;
+  for (int i = 0; i < 4; ++i) {
+    widths[i] = slot(*pieces[i].text, pieces[i].font);
+    total += widths[i];
+  }
+  if (!caption.empty()) total += gap;
+  // Centred; a value too wide for the row on its own (none measured is) starts
+  // at the row's left edge and is ellipsised by its label rather than pushed
+  // off the left of the tile.
+  int x = row.x + std::max(0, (row.width - total) / 2);
+  for (int i = 0; i < 4; ++i) {
+    if (widths[i] == 0) continue;
+    const bool small = pieces[i].font == words;
+    const int drop = small ? words_drop : 0;
+    const int width = std::min(widths[i], row.right() - x);
+    if (width <= pad) break;
+    label(parent, pieces[i].text->c_str(),
+          {x, row.y + drop, width, row.height - drop}, pieces[i].font,
+          LV_TEXT_ALIGN_LEFT);
+    x += width;
+    if (i == 1 && !parts.value.empty()) x += gap;
+  }
+}
+
 // `valid` gates the fabricated-number path once, here, for every caller
 // (Home's situational tile and the market-page/indoor-page sidebar tiles
 // below) instead of each call site inventing its own placeholder: an invalid
@@ -164,7 +247,7 @@ void assert_tree_in_safe_canvas(lv_obj_t* object, int page) {
 // in ui_data.hpp); only consulted when weather is true, so callers that pass
 // weather=false can leave it null.
 void tile(lv_obj_t* parent, const char* title, const char* value,
-          const char* detail, Rect bounds, bool weather, bool indoor,
+          const DetailParts& detail, Rect bounds, bool weather, bool indoor,
           bool valid = true, const char* condition = nullptr) {
 #ifndef NDEBUG
   // Logged, not asserted: see the tree walk above - LVGL's assert handler
@@ -199,10 +282,9 @@ void tile(lv_obj_t* parent, const char* title, const char* value,
         LV_TEXT_ALIGN_CENTER);
   // Full width, not indented past the icon like the value above it. The
   // tile cell is 190px, and holding the detail clear of a 60px visual left
-  // 108px for a line that needs up to 149 - the icon has the value row's
+  // 108px for a line that needs up to 178 - the icon has the value row's
   // height to itself and does not need the detail row's width as well.
-  label(parent, valid ? detail : "", rows.detail, small_font(),
-        LV_TEXT_ALIGN_CENTER);
+  if (valid) tile_detail(parent, detail, rows.detail);
 }
 
 }  // namespace
@@ -273,10 +355,10 @@ void reset_context(UiContext& context) {
 void render_home_tile(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
                       HomeTileKind kind, Rect bounds) {
   char value[24] = "";
-  // 24 was enough for a condition word alone. The weather tile now appends
-  // "  FEELS -12C" to it, which is 12 more characters before the condition
-  // has said anything.
-  char detail[48] = "";
+  // The detail line is built in ui_data.hpp (home_tile_detail_parts), split
+  // into the words drawn at 14 px and the reading drawn at 20 - see
+  // tile_detail() above. Pure there, so its worst case is a host test.
+  const DetailParts detail = home_tile_detail_parts(snapshot, kind);
   const char* title = text(Text::TileStatus);
   const char* condition = nullptr;
   bool weather = false;
@@ -290,51 +372,20 @@ void render_home_tile(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
       // where battery_percent_trustworthy() used to be). The tile is only
       // ever chosen when the reading is valid - see choose_home_tile().
       std::snprintf(value, sizeof(value), "%u%%", snapshot.battery.percent);
-      std::snprintf(detail, sizeof(detail), "%s",
-                    snapshot.battery.overvoltage_warning
-                        ? text(Text::StatusOvervoltage)
-                        : text(Text::StatusLowBattery));
       break;
     case HomeTileKind::Weather:
       title = text(Text::TileWeather);
       std::snprintf(value, sizeof(value), "%s",
                     temperature_text(snapshot.weather.current.temperature_c, 0)
                         .c_str());
-      // Condition, then what it feels like - the two things the bare number
-      // above does not say. has_feels_like rather than a sentinel, for the
-      // same reason the weather page uses it: a provider that omits the
-      // field must show nothing, and 0.0 C is an ordinary reading.
-      //
-      // "~11°C", not "FEELS 11°C". Measured against the widest condition
-      // wording this can hold, the spelled-out version needs 189px of the
-      // 176px a 190px tile leaves: "Thunderstorm FEELS -12°C" ellipsises,
-      // and an ellipsis here would eat the feels-like figure that is the
-      // whole point of the line. The weather page still spells it out, where
-      // there is room to.
-      if (snapshot.weather.current.has_feels_like) {
-        std::snprintf(detail, sizeof(detail), "%s%s ~%s%s",
-                      snapshot.weather.alert ? text(Text::StatusAlert) : "",
-                      snapshot.weather.current.condition.c_str(),
-                      temperature_text(snapshot.weather.current.feels_like_c, 0)
-                          .c_str(),
-                      snapshot.weather.stale ? text(Text::StaleSuffix) : "");
-      } else {
-        std::snprintf(detail, sizeof(detail), "%s%s%s",
-                      snapshot.weather.alert ? text(Text::StatusAlert) : "",
-                      snapshot.weather.current.condition.c_str(),
-                      snapshot.weather.stale ? text(Text::StaleSuffix) : "");
-      }
       condition = snapshot.weather.current.condition.c_str();
       weather = true;
       break;
     case HomeTileKind::Market:
       title = text(Text::TileMarket);
-      // value_has_decimals/has_change: see their own comments in
-      // app_snapshot.hpp. This tile only ever shows once ua_fx.valid is
-      // true (choose_home_tile()), and a genuine NBU rate always has
-      // decimals; has_change can still be false on the rare refresh with
-      // no honest change figure, so detail is left blank rather than a
-      // fabricated "+0.00%".
+      // value_has_decimals: see its own comment in app_snapshot.hpp. This
+      // tile only ever shows once ua_fx.valid is true (choose_home_tile()),
+      // and a genuine NBU rate always has decimals.
       if (snapshot.ua_fx.value_has_decimals) {
         std::snprintf(value, sizeof(value), "%d.%02d",
                       snapshot.ua_fx.primary_value / 100,
@@ -342,19 +393,11 @@ void render_home_tile(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
       } else {
         std::snprintf(value, sizeof(value), "%d", snapshot.ua_fx.primary_value);
       }
-      if (snapshot.ua_fx.has_change) {
-        std::snprintf(detail, sizeof(detail), "%+.2f%%",
-                      snapshot.ua_fx.primary_change_percent);
-      } else {
-        detail[0] = '\0';
-      }
       break;
     case HomeTileKind::Indoor:
       title = text(Text::TileIndoor);
       std::snprintf(value, sizeof(value), "%s",
                     temperature_text(snapshot.indoor.temperature_c, 1).c_str());
-      std::snprintf(detail, sizeof(detail), "RH %u%%",
-                    snapshot.indoor.humidity_percent);
       indoor = true;
       break;
     case HomeTileKind::None:
@@ -416,12 +459,16 @@ void render_market_sidebar(lv_obj_t* parent,
       std::snprintf(index_value, sizeof(index_value), "%d",
                     market.secondary_value);
     }
-    char index_detail[24];
+    // The change is a reading, so it is drawn at 20 px like the Home tiles'
+    // (see tile_detail()). The widest it can be is "+100.00%", 93.7 px at
+    // montserrat_20 - inside the side column's 96 px row with nothing beside
+    // it; a real daily change is under 10%, "+9.99%".
+    DetailParts index_detail;
     if (market.has_change) {
-      std::snprintf(index_detail, sizeof(index_detail), "%+.2f%%",
+      char change[24];
+      std::snprintf(change, sizeof(change), "%+.2f%%",
                     market.secondary_change_percent);
-    } else {
-      index_detail[0] = '\0';
+      index_detail.value = change;
     }
     tile(parent, market.secondary_label.c_str(), index_value, index_detail,
          stacked_tile_cell(bounds, slot, count), false, false, market.valid);
@@ -432,9 +479,14 @@ void render_market_sidebar(lv_obj_t* parent,
     const MarketRange range = market_intraday_range(
         market.intraday_samples, market.intraday_sample_count);
     char range_value[24];
-    char range_detail[24];
+    char range_low[24];
     std::snprintf(range_value, sizeof(range_value), "%d", range.high);
-    std::snprintf(range_detail, sizeof(range_detail), "%d", range.low);
+    std::snprintf(range_low, sizeof(range_low), "%d", range.low);
+    // The low is a reading too, so 20 px. It is the same magnitude as the high
+    // in the value row above it, which is set larger still in a row no wider,
+    // so whatever fits there fits here.
+    DetailParts range_detail;
+    range_detail.value = range_low;
     const Rect cell = stacked_tile_cell(bounds, slot, count);
     tile(parent, text(Text::TileRange), range_value, range_detail, cell, false,
          false, true);
