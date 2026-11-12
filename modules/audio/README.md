@@ -35,8 +35,8 @@ which means nothing else guarantees its level across a reset except this
 code.
 
 `audio_init()` writes GPIO46 low before it ever configures the pin as an
-output, and `audio_play_tone()` is the only thing that ever raises it, for
-exactly the duration of a tone. Two separate reasons this matters:
+output, and the play functions (`audio_play_tone()`, `audio_play_notes()`) are the only things that ever raise it, for
+exactly the duration of a tone or sequence. Two separate reasons this matters:
 
 - **Strapping safety.** A pin observed high during the next boot's reset
   sampling can change how that boot behaves.
@@ -177,7 +177,7 @@ drain curve. Two independent pieces of evidence settled which:
 
 **Conclusion: the "amplifier only while playing" design is real.** GPIO46
 does gate the amplifier in hardware, the amplifier is off except during
-`write_tone_step()`'s enabled window, and the battery-drain history is not
+`write_sequence_step()`'s enabled window, and the battery-drain history is not
 being polluted by a continuously-on amplifier. The readback is now correct
 and can be relied on for future diagnosis.
 
@@ -267,7 +267,7 @@ actually start the channel): for an output-only device like this one, it
 unconditionally calls `_i2s_drv_enable(i2s_data, true, false)` - i.e.
 `i2s_channel_disable()` on the TX channel - as a defensive "make sure it's
 disabled before reconfiguring the slot/clock" step, on *every* call, not
-just the first. Since this module's own `write_tone_step()` always leaves
+just the first. Since this module's own `write_sequence_step()` always leaves
 the channel disabled (`I2S_CHAN_STATE_READY`) between tones, that defensive
 disable call finds an already-disabled channel on every single open - which
 is exactly what `i2s_channel_disable()` in `i2s_common.c` logs an error
@@ -418,6 +418,45 @@ actually spans a whole streaming session correctly on the physical panel.
 All of that needs the AirPlay integration pass this task deliberately does
 not include.
 
+## Note sequences: `audio_play_notes()` / `audio_play_notes_async()`
+
+A short melody (a sync-complete chime, an alarm figure) is a list of
+`audio::Note{frequency_hz, duration_ms}`; `frequency_hz == 0` is a rest.
+`audio_play_notes()` plays the whole list inside **one codec open and one
+amplifier window**: lead silence, GPIO46 high, every note, trail silence,
+`kDrainMs`, GPIO46 low. It is the same pop-free sequence as a tone - a tone
+is now literally a one-note sequence (`audio_play_tone()` clamps, then calls
+`audio_play_notes()`), and the diagnostic sweep's `write_tone_step()` is a
+one-note call into the same `write_sequence_step()` - so there is one
+sequence to keep correct, not two.
+
+- **Pop-free guarantee.** Each note is generated with its own `kFadeMs`
+  fades, so every note starts and ends at zero and neighbouring notes cannot
+  click against each other. A rest is silence written with the amplifier
+  *still on*: GPIO46 never toggles between notes, only at the two ends of the
+  sequence where the DMA is carrying silence, same as a single tone.
+- **Validation, before any hardware is touched.** `ESP_ERR_INVALID_ARG` for
+  no notes, more than 32, a note outside `kMinFrequencyHz..kMaxFrequencyHz`
+  or `kMinDurationMs..kMaxDurationMs`, a rest under 10 ms or over
+  `kMaxDurationMs`, or a total over `kMaxSequenceMs` (5 s - the amplifier
+  window is held for the full length, so it needs a bound of its own). Unlike
+  `audio_play_tone()`, which clamps for `/beep`, sequences are rejected, not
+  silently rewritten.
+- **Refuse-if-busy.** `audio_play_notes_async()` copies the notes (the
+  caller's table need not outlive the call), claims the same
+  `claim_playback_slot()` as `audio_play_tone_async()` and returns
+  `ESP_ERR_INVALID_STATE` rather than queueing. While an AirPlay stream holds
+  the codec both forms are refused, as tones are.
+- **Tray indicator.** Raised and cleared once around the whole sequence, in
+  `write_sequence_step()`.
+- **`notes_duration_ms()`** (header-inline, `audio_notes.hpp`, no ESP-IDF
+  dependency, defined even with `CONFIG_AUDIO_ENABLE=n`) sums the durations so
+  a melody table can be `static_assert`-ed against the sound budget; it is
+  host-tested in `tests/host/test_audio_drain.cpp`. With audio off the two play
+  functions are inline stubs returning `ESP_ERR_NOT_SUPPORTED`.
+
+Not yet run on hardware: the multi-note window has built but not been heard.
+
 ## Verifying the tray's speaker indicator
 
 Non-blocking playback is what makes this possible at all: with the old
@@ -442,7 +481,7 @@ tone is heard.
 `ms=3000` gives a 3 s window: the first `/shot`, issued immediately, should
 land while the tone is still playing - `audio_init()` registered this
 module's icon with `app_core::register_tray_indicator()` once at startup,
-and `write_tone_step()` calls `app_core::set_tray_indicator_active(handle,
+and `write_sequence_step()` calls `app_core::set_tray_indicator_active(handle,
 true)` right before raising GPIO46 - and show the icon; the second, a few
 seconds after the tone has ended (`set_tray_indicator_active(handle,
 false)`, called unconditionally on every exit path right after GPIO46
@@ -488,7 +527,7 @@ unconditionally, even before the UI has anything ready to draw into,
 specifically so a real board's log can answer "did the flag even arrive
 here" before anyone looks at a screenshot to ask "did it draw". This log
 alone is what found the bug above: it is receiving-side only, so it could
-prove "nothing arrived" but not which half was broken. `write_tone_step()`
+prove "nothing arrived" but not which half was broken. `write_sequence_step()`
 now logs the same transition from the *sending* side too (`tray indicator:
 requesting slot %d active=true/false`, right next to the
 `app_core::set_tray_indicator_active()` calls themselves), and
@@ -521,7 +560,8 @@ the reflective panel remain pending until someone can inspect the panel.
 ## Core touch points
 
 Three, per the module contract's rule 5 - grep for these and that is the
-entire footprint this module has on core:
+entire footprint this module has on core (`audio_play_notes()` adds none: its callers are
+whoever includes `audio.hpp`, and its tray calls are the third bullet's):
 
 - `main/app_main.cpp` calls `audio::audio_init()` once at startup, right
   after the shared-bus I2C scan, and logs success or failure - a failure is
@@ -534,7 +574,7 @@ entire footprint this module has on core:
 - `audio_init()` calls `app_core::register_tray_indicator()` once with a
   checked-in `20×20` tight-packed I1 bitmap generated from Phosphor Icons
   Bold `speaker-high-bold`. Only the `enable_amplifier=true` playback path in
-  `write_tone_step()` calls `app_core::set_tray_indicator_active(handle, true)`
+  `write_sequence_step()` (shared by tones, notes and the sweep) calls `app_core::set_tray_indicator_active(handle, true)`
   before raising GPIO46 and sets it false after GPIO46 drops, including every
   exit path; the diagnostic-bypass path does neither.
 

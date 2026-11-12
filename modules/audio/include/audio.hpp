@@ -1,5 +1,9 @@
 #pragma once
 
+// Note and notes_duration_ms() are plain arithmetic, available on the host
+// and with CONFIG_AUDIO_ENABLE=n alike.
+#include "audio_notes.hpp"
+
 #ifdef ESP_PLATFORM
 
 #include <esp_err.h>
@@ -51,6 +55,24 @@ esp_err_t audio_play_tone(int frequency_hz, int duration_ms);
 // a redundant call with a plain, unprotected bool), so two overlapping
 // playbacks would race that state, not queue politely.
 esp_err_t audio_play_tone_async(int frequency_hz, int duration_ms);
+
+// Plays a short sequence of notes (a rest is frequency_hz == 0) inside ONE
+// codec open and ONE amplifier window: silence, amplifier on, every note with
+// its own few-millisecond fades, silence, drain, amplifier off. The same
+// pop-free sequence audio_play_tone() uses - a tone is a one-note sequence -
+// so a melody never toggles GPIO46 between its notes.
+//
+// Rejects with ESP_ERR_INVALID_ARG, before touching any hardware: no notes, a
+// note outside the tone's frequency/duration range, a rest shorter than 10 ms,
+// or a sequence longer than the module's caps. Refuses (ESP_ERR_INVALID_STATE)
+// while an audio stream holds the codec, exactly as tones do. Blocks for the
+// whole sequence - prefer the _async form from anything latency-sensitive.
+esp_err_t audio_play_notes(const Note* notes, size_t count);
+
+// Copies the notes, runs audio_play_notes() on its own task and returns once
+// that task exists. Same refuse-if-busy slot as audio_play_tone_async():
+// ESP_ERR_INVALID_STATE if anything is already playing, never queued.
+esp_err_t audio_play_notes_async(const Note* notes, size_t count);
 
 // 0-100. Applied immediately if the codec happens to be open (it normally
 // is not, between tones); otherwise stored and applied at the next
@@ -143,6 +165,13 @@ inline esp_err_t audio_play_tone(int /*frequency_hz*/, int /*duration_ms*/) {
   return ESP_ERR_NOT_SUPPORTED;
 }
 inline esp_err_t audio_play_tone_async(int /*frequency_hz*/, int /*duration_ms*/) {
+  return ESP_ERR_NOT_SUPPORTED;
+}
+inline esp_err_t audio_play_notes(const Note* /*notes*/, size_t /*count*/) {
+  return ESP_ERR_NOT_SUPPORTED;
+}
+inline esp_err_t audio_play_notes_async(const Note* /*notes*/,
+                                        size_t /*count*/) {
   return ESP_ERR_NOT_SUPPORTED;
 }
 inline void audio_set_volume(int /*percent*/) {}

@@ -1,4 +1,5 @@
 #include "audio_drain.hpp"
+#include "audio_notes.hpp"
 
 #include "test_support.hpp"
 
@@ -31,4 +32,12 @@ HOST_TEST(drain_ms_for_rate_rounds_up_rather_than_truncating) {
   // prove itself.
   EXPECT_EQ(audio::drain_ms_for_rate(8000), 180u);
   EXPECT_EQ(audio::drain_ms_for_rate(48000), 30u);
+}
+
+HOST_TEST(notes_duration_sums_notes_and_rests) {
+  // A rest counts: the sequence is as long as its notes and its silences.
+  const audio::Note notes[] = {{1047, 120}, {0, 30}, {1319, 120}};
+  EXPECT_EQ(audio::notes_duration_ms(notes, 3), 270u);
+  EXPECT_EQ(audio::notes_duration_ms(notes, 0), 0u);
+  EXPECT_EQ(audio::notes_duration_ms(nullptr, 0), 0u);
 }
