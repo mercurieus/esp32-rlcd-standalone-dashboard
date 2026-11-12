@@ -252,6 +252,17 @@ now hard-resets afterwards; if that ever goes back to `no_reset`, every probed
 port is left with its application not running - which presents as a board that
 is on USB, flashes fine, and answers neither serial nor network.
 
+## PWR is not an application button
+
+PWR is wired only to a push-button power controller (U3, ECJ23001) that
+switches the board's whole supply after the USB/battery merge. Firmware cannot
+see a PWR press, cannot tell a long press is coming, and gets no warning
+before power is cut - on battery or on USB. There is no shutdown hook; persist
+anything important before it is needed, never "on shutdown". Never design a
+feature around PWR without the hardware change described in
+[references/power-and-schematic.md](references/power-and-schematic.md), which
+also carries the schematic's power path, header pinout and other traced facts.
+
 ## Two buttons, three contexts
 
 The buttons change meaning with what is on screen, which is only usable because the screen says what they currently do - the bottom band carries page dots on a carousel page and a button legend on the settings menu. Keep that pairing: a context that reassigns a button without saying so is worse than one that offers less.
