@@ -428,11 +428,11 @@ bool write_sequence_step(const Note* notes, size_t count,
     // audio_init() never reached registration) - this line is what a future
     // failure needs on top of that: proof audio.cpp actually made the call
     // at all, and with which handle.
-    ESP_LOGI(kTag, "tray indicator: requesting slot %d active=true",
+    ESP_LOGD(kTag, "tray indicator: requesting slot %d active=true",
              static_cast<int>(g_tray_indicator.slot));
     app_core::set_tray_indicator_active(g_tray_indicator, true);
     gpio_set_level(board::kAudioAmpEnable, 1);
-    ESP_LOGI(kTag, "GPIO46 (amp enable) reads %d after raising",
+    ESP_LOGD(kTag, "GPIO46 (amp enable) reads %d after raising",
              gpio_get_level(board::kAudioAmpEnable));
   }
 
@@ -456,9 +456,9 @@ bool write_sequence_step(const Note* notes, size_t count,
   // GPIO46 was never touched in the first place.
   gpio_set_level(board::kAudioAmpEnable, 0);
   if (enable_amplifier) {
-    ESP_LOGI(kTag, "GPIO46 (amp enable) reads %d after dropping",
+    ESP_LOGD(kTag, "GPIO46 (amp enable) reads %d after dropping",
              gpio_get_level(board::kAudioAmpEnable));
-    ESP_LOGI(kTag, "tray indicator: requesting slot %d active=false",
+    ESP_LOGD(kTag, "tray indicator: requesting slot %d active=false",
              static_cast<int>(g_tray_indicator.slot));
     app_core::set_tray_indicator_active(g_tray_indicator, false);
   }
@@ -587,7 +587,7 @@ esp_err_t audio_init() {
     return result;
   }
 
-  ESP_LOGI(kTag, "ES8311 codec ready, output volume=%d%%", g_volume_percent);
+  ESP_LOGD(kTag, "ES8311 codec ready, output volume=%d%%", g_volume_percent);
   return ESP_OK;
 }
 
@@ -1006,7 +1006,7 @@ esp_err_t audio_play_notes_async(const Note* notes, size_t count) {
     return ESP_ERR_NO_MEM;
   }
   (void)request.release();  // the task owns it now
-  ESP_LOGI(kTag, "note sequence started: %u notes, %u ms",
+  ESP_LOGD(kTag, "note sequence started: %u notes, %u ms",
            static_cast<unsigned>(count),
            static_cast<unsigned>(notes_duration_ms(notes, count)));
   return ESP_OK;

@@ -110,6 +110,24 @@ HOST_TEST(battery_alarm_rearms_after_charging_or_recovery) {
   EXPECT_TRUE(fired(alarm.update(true, false, 2), SoundEvent::BatteryCritical));
 }
 
+HOST_TEST(battery_alarm_rearm_gives_back_a_refused_alarm) {
+  BatteryAlarm alarm;
+  EXPECT_TRUE(!alarm.update(true, false, 50).has_value());
+  EXPECT_TRUE(fired(alarm.update(true, false, 14), SoundEvent::BatteryLow));
+  EXPECT_TRUE(!alarm.update(true, false, 14).has_value());  // used up
+  alarm.rearm(SoundEvent::BatteryLow);                      // play was busy
+  EXPECT_TRUE(fired(alarm.update(true, false, 14), SoundEvent::BatteryLow));
+  EXPECT_TRUE(!alarm.update(true, false, 14).has_value());
+
+  // Critical spent the low alarm too; rearming critical gives both back.
+  EXPECT_TRUE(fired(alarm.update(true, false, 2), SoundEvent::BatteryCritical));
+  EXPECT_TRUE(!alarm.update(true, false, 2).has_value());
+  alarm.rearm(SoundEvent::BatteryCritical);
+  EXPECT_TRUE(fired(alarm.update(true, false, 2), SoundEvent::BatteryCritical));
+  // Without a rearm (a policy suppression) it stays used up.
+  EXPECT_TRUE(!alarm.update(true, false, 2).has_value());
+}
+
 HOST_TEST(battery_alarm_is_silent_without_a_battery) {
   BatteryAlarm alarm;
   EXPECT_TRUE(!alarm.update(true, false, 50).has_value());

@@ -66,6 +66,17 @@ TrayIndicatorHandle register_tray_indicator(const TrayIndicatorBitmap& bitmap);
 // LVGL, which only runs on its own thread. A no-op for an invalid handle.
 void set_tray_indicator_active(TrayIndicatorHandle handle, bool active);
 
+// True when any registered indicator is active right now, or went inactive
+// less than grace_ms ago (monotonic clock). Lets a caller that must not trust
+// a measurement taken while a module was working - the battery monitor and
+// the audio amplifier's current draw - ask without knowing which module owns
+// which slot or including its header.
+bool tray_any_active_within(int64_t grace_ms);
+
+// Test-only: pins the registry's clock to this many ms (>= 0); a negative
+// value restores the real monotonic clock.
+void set_tray_clock_for_test(int64_t now_ms);
+
 // Read-only snapshot of one registry slot - a plain copy (the real state
 // underneath is synchronized for cross-task access, but that is this
 // file's problem, not the caller's), for ui:: to render from and for host

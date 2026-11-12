@@ -25,8 +25,9 @@ bool now(app_core::RtcDateTime& out);
 int64_t last_sync_epoch();
 
 // Called from the SNTP callback on every sync, on the lwIP thread: keep it to
-// something cheap like a task notification. Pass nullptr to clear. Register
-// before start() so the first sync cannot be missed.
+// something cheap like a task notification. Pass nullptr to clear. It may
+// be registered at any time: a sync that lands before the observer is set is
+// not lost, because the monitor checks synced() on its first pass.
 void set_sync_observer(void (*observer)());
 
 }  // namespace net_time
