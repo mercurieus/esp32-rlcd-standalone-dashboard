@@ -22,6 +22,7 @@
 #include "ota_release.hpp"
 #include "ota_session.hpp"
 #include "shtc3.hpp"
+#include "sound_events.hpp"
 #include "ui_app.hpp"
 #include "weather.hpp"
 #include "wifi_provision.hpp"
@@ -524,6 +525,12 @@ void apply_volume_preset_change() {
   // every cycle through the four presets.
   constexpr int kConfirmFrequencyHz = 2000;
   constexpr int kConfirmDurationMs = 150;
+  // Through the same policy as every other sound, as its one exception: it
+  // ignores quiet hours and clock trust (the operator is holding the board
+  // and asked to hear the level) but still respects Volume Off. The press
+  // that got here played no button tick (see ui::set_button_feedback_handler)
+  // - a tick would hold the audio module and this would be refused as busy.
+  if (!sound_events::allowed(app_core::SoundEvent::VolumeConfirm)) return;
   const esp_err_t result =
       audio::audio_play_tone_async(kConfirmFrequencyHz, kConfirmDurationMs);
   // Not fatal either way - refused only if a tone/sweep is already playing
@@ -979,10 +986,24 @@ int g_charge_offset_mv = 0;
                      step, static_cast<unsigned>(kBatterySlopePeriodMs / 1000),
                      g_cable_step_charging ? "plugged in" : "unplugged",
                      g_charge_offset_mv);
+            // The power sounds hook this step and nothing else - not
+            // battery.charging, which also changes with nobody touching the
+            // cable (the hold below expiring, the slope window filling after
+            // boot, a full cell's charger finishing). See spec section 6.
+            sound_events::on_cable_step(g_cable_step_charging, step);
           }
         }
         g_previous_tick_mv = slope_mv;
         g_previous_tick_valid = true;
+      } else {
+        // No cell (or a reading nobody trusts) breaks the run of consecutive
+        // samples the step is measured across. Without this, the first valid
+        // reading after a gap - a cell going back in - was compared with
+        // whatever the last one before the gap said, minutes or hours ago, and
+        // read as a cable event: a wrong icon, a bogus charge offset, and a
+        // power sound with no cable involved. Spec: never sound when no
+        // battery is connected.
+        g_previous_tick_valid = false;
       }
       if (g_cable_hold_ticks > 0) --g_cable_hold_ticks;
 
@@ -1141,6 +1162,10 @@ int g_charge_offset_mv = 0;
         }
       }
 
+      // Before the publish and on the same reading: the low/critical alarms
+      // fire on the sample that crosses the threshold. Invalid readings (no
+      // cell) never fire - BatteryAlarm ignores them.
+      sound_events::on_battery(battery);
       wifi_provision::set_battery(battery);
     } else {
       ESP_LOGW(kTag, "battery ADC read failed");
@@ -1775,6 +1800,15 @@ extern "C" void app_main() {
   ui::set_quiet_hours_preset(load_quiet_hours_preset());
   ui::set_quiet_hours_store_handler(&store_quiet_hours_preset);
 
+  // The boot melody. Here rather than straight after audio_init(), on
+  // purpose: it needs the saved Volume preset (Off must mean a silent boot,
+  // not the default level's chime) and Quiet hours preset restored above, and
+  // the RTC read to know whether it is night - before SNTP the board's only
+  // trusted clock. Without a valid RTC the clock is untrusted, which the
+  // policy treats as quiet: no chime.
+  sound_events::set_boot_clock(clock, rtc_ok);
+  sound_events::init(static_cast<int>(reset_reason));
+
   if (!ui::start(snapshot, clock, !rtc_ok)) {
     fatal_loop("UI lifecycle initialization failed", ESP_FAIL);
   }
@@ -1787,6 +1821,7 @@ extern "C" void app_main() {
   ui::set_setup_gesture_handler(&wifi_provision::toggle_setup);
   ui::set_update_handler(&run_update_action);
   ui::set_volume_changed_handler(&apply_volume_preset_change);
+  ui::set_button_feedback_handler(&sound_events::on_button);
   // Lets GET /shot answer with what is on the panel right now. No-op in a
   // release build, where the route does not exist.
   wifi_provision::set_screenshot_provider(&board::framebuffer_snapshot);

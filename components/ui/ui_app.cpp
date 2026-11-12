@@ -115,6 +115,13 @@ void (*g_update_handler)(bool install) = nullptr;
 // which case cycling the Volume row simply reports nothing rather than
 // crashing on a null call.
 void (*g_volume_changed_handler)() = nullptr;
+// Null until main registers it; see set_button_feedback_handler's comment in
+// ui_app.hpp for which presses report and why one does not.
+void (*g_button_feedback_handler)() = nullptr;
+
+void report_button_feedback() {
+  if (g_button_feedback_handler != nullptr) g_button_feedback_handler();
+}
 
 // The subset of AppSnapshot that non-UI FreeRTOS tasks (wifi_provision, the
 // battery monitor, and now the indoor/weather/market/net_time providers)
@@ -486,9 +493,11 @@ void timer_callback(lv_timer_t* timer) {
       if (app_core::ota_awaits_confirm(runtime->snapshot.ota)) {
         if (event == board::ButtonEvent::Next) {
           ESP_LOGI(kTag, "button event=BOOT action=accept-update");
+          report_button_feedback();
           ota::answer_confirm(true);
         } else if (event == board::ButtonEvent::Previous) {
           ESP_LOGI(kTag, "button event=KEY action=reject-update");
+          report_button_feedback();
           ota::answer_confirm(false);
         }
         continue;
@@ -505,22 +514,31 @@ void timer_callback(lv_timer_t* timer) {
       if (runtime->showing_settings) {
         if (event == board::ButtonEvent::EnterSetup) {
           ESP_LOGI(kTag, "button event=KEY-LONG action=leave-settings");
+          report_button_feedback();
           runtime->showing_settings = false;
           runtime->carousel.page_started_ms = now_ms;
           (void)render_current(*runtime, "settings-exit", false);
           page_rebuilt = true;
         } else if (event == board::ButtonEvent::Previous) {
+          report_button_feedback();
           runtime->settings.focus_next();
           runtime->context.settings_focus = runtime->settings.focused_index();
           settings_dirty = true;
         } else if (event == board::ButtonEvent::Next) {
           settings_action = runtime->settings.activate();
+          // The Volume row's press is heard as its confirmation tone instead
+          // (see set_button_feedback_handler) - a tick first would take the
+          // audio module and get that tone refused.
+          if (settings_action != SettingsAction::VolumeChanged) {
+            report_button_feedback();
+          }
           settings_dirty = true;
         }
         continue;
       }
       if (event == board::ButtonEvent::OpenMenu) {
         ESP_LOGI(kTag, "button event=BOOT-LONG action=open-settings");
+        report_button_feedback();
         runtime->settings.reset();
         runtime->context.settings_focus = 0;
         runtime->context.settings_status.clear();
@@ -535,6 +553,7 @@ void timer_callback(lv_timer_t* timer) {
         // difference between a button problem and a wiring problem.
         ESP_LOGI(kTag, "button event=KEY-LONG handler=%s",
                  g_setup_gesture_handler != nullptr ? "registered" : "MISSING");
+        report_button_feedback();
         if (g_setup_gesture_handler != nullptr) g_setup_gesture_handler();
         continue;
       }
@@ -547,6 +566,7 @@ void timer_callback(lv_timer_t* timer) {
       const bool next = event == board::ButtonEvent::Next;
       const char* reason = next ? "manual-boot" : "manual-key";
       ESP_LOGI(kTag, "button event=%s", next ? "BOOT" : "KEY");
+      report_button_feedback();
       const auto transition = next
                                   ? app_core::carousel::next(
                                         runtime->carousel, now_ms,
@@ -912,6 +932,10 @@ void set_update_handler(void (*handler)(bool install)) {
 
 void set_volume_changed_handler(void (*handler)()) {
   g_volume_changed_handler = handler;
+}
+
+void set_button_feedback_handler(void (*handler)()) {
+  g_button_feedback_handler = handler;
 }
 
 void set_update_status(const std::string& status, bool install_available) {

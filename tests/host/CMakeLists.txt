@@ -78,6 +78,7 @@ add_executable(host_tests
     test_settings_menu.cpp
     test_history.cpp
     test_audio_drain.cpp
+    test_sound_policy.cpp
     test_artwork.cpp
     ../../components/app_core/app_snapshot.cpp
     ../../components/app_core/history.cpp
