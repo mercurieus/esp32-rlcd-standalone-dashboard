@@ -2040,7 +2040,7 @@ inline constexpr int kIndoorDeltaGap = 2;
 
 constexpr IndoorLayout indoor_layout(const Rect bounds) {
   const int inset = 8;
-  const int full_width = bounds.width - 2 * inset;
+  const int full_width = bounds.width - 2 * inset;  // title/header/separator
   const int header_height = safe_text_box_height(26, kSetupMediumFontLineHeight);
   const int row_height = safe_text_box_height(18, kSetupSmallFontLineHeight);
   const int header_y = bounds.y + 4;
@@ -2097,9 +2097,15 @@ constexpr IndoorLayout indoor_layout(const Rect bounds) {
   // the panel as visibly tightening the chart. These are narrower: 74 px for
   // both, bought by measuring each label instead of giving both scales the
   // same round 50, and by dropping the units the header already carries.
-  const int plot_x = bounds.x + inset + kIndoorTemperatureScaleWidth;
-  const int plot_width =
-      full_width - kIndoorTemperatureScaleWidth - kIndoorHumidityScaleWidth;
+  //
+  // The chart takes the bounds' full width. The 8 px inset above is the
+  // title's and header row's, and the chart used to pay it again on both
+  // sides; the bounds the page receives are already inside safe_canvas()'s
+  // 6 px margin, so the chart's own inset only wasted 16 px of plot
+  // (content 388 px: plot 298 -> 314).
+  const int plot_x = bounds.x + kIndoorTemperatureScaleWidth;
+  const int plot_width = bounds.width - kIndoorTemperatureScaleWidth -
+                         kIndoorHumidityScaleWidth;
 
   return IndoorLayout{
       {bounds.x + inset, bounds.y + 8, kIndoorTitleWidth, row_height},
@@ -2115,7 +2121,7 @@ constexpr IndoorLayout indoor_layout(const Rect bounds) {
       {humidity_trend_x, header_y, kIndoorTrendIconWidth, header_height},
       {bounds.x + inset, bounds.y + 36, full_width, kSeparatorWidth},
       {plot_x, plot_y, plot_width, plot_height},
-      {bounds.x + inset, plot_y, kIndoorTemperatureScaleWidth, plot_height},
+      {bounds.x, plot_y, kIndoorTemperatureScaleWidth, plot_height},
       {plot_x + plot_width, plot_y, kIndoorHumidityScaleWidth, plot_height},
       {plot_x, axis_y, plot_width, row_height},
       {temperature_delta_x, delta_y, kIndoorTemperatureDeltaWidth, row_height},
