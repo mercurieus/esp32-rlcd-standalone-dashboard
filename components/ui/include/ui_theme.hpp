@@ -229,6 +229,10 @@ constexpr int text_outline_width(const int font_line_height) {
 // the whole reflective panel, which is what the cheap update path exists to
 // avoid. Wi-Fi has two overlapping static canvases; switching state only
 // changes their opacity.
+// What the tray Wi-Fi icon says: solid bars, blinking bars (joining), or the
+// slashed glyph (setup mode, unconfigured, or failed).
+enum class WifiIconState : uint8_t { Connected, Connecting, Off };
+
 struct WifiIconParts {
   lv_obj_t* connected = nullptr;
   lv_obj_t* disconnected = nullptr;
@@ -512,8 +516,10 @@ void trend_icon(lv_obj_t* parent, Rect bounds, TrendKind kind,
                 bool inverse = false);
 // Fills the bottom band on pages where the buttons do something other than
 // turn pages. A no-op when hints.visible is false.
-WifiIconParts wifi_icon(lv_obj_t* parent, Rect bounds, bool connected);
-void set_wifi_icon_state(const WifiIconParts& parts, bool connected);
+WifiIconParts wifi_icon(lv_obj_t* parent, Rect bounds, WifiIconState state,
+                        bool blink_visible);
+void set_wifi_icon_state(const WifiIconParts& parts, WifiIconState state,
+                         bool blink_visible);
 
 // The shared building block behind every I1 canvas in this file
 // (battery_icon()'s charging overlay, tray_indicator_icon()'s module

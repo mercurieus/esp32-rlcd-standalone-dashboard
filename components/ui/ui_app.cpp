@@ -846,6 +846,7 @@ void timer_callback(lv_timer_t* timer) {
   if (runtime->initialized) {
     (void)update_tray_indicators(runtime->context);
     update_clock_blink(runtime->context, runtime->snapshot, now_ms);
+    update_wifi_icon_blink(runtime->context, runtime->snapshot, now_ms);
   }
 }
 

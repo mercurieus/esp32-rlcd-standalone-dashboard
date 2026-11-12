@@ -102,6 +102,11 @@ struct UiContext {
   // The tray indicators are shapes now, not labels, so what the cheap update
   // path needs is their mutable parts rather than a text pointer.
   WifiIconParts network_icon{};
+  // Blink state for update_wifi_icon_blink, same applied-compare idea as the
+  // clock blink above. wifi_applied_icon is compared, never dereferenced.
+  bool wifi_blink_visible = true;
+  WifiIconState wifi_applied_state = WifiIconState::Off;
+  const lv_obj_t* wifi_applied_icon = nullptr;
   BatteryIconParts battery_icon_parts{};
   // One per app_core tray-registry slot. All-null (a safe no-op for
   // set_tray_indicator_icon_visible) for a slot nothing has registered, or
@@ -234,6 +239,11 @@ bool update_tray_indicators(UiContext& context);
 void update_clock_blink(UiContext& context,
                         const app_core::AppSnapshot& snapshot,
                         uint64_t now_ms);
+
+// Blinks the tray Wi-Fi icon while it is connecting. Call every tick.
+void update_wifi_icon_blink(UiContext& context,
+                            const app_core::AppSnapshot& snapshot,
+                            uint64_t now_ms);
 
 lv_obj_t* navigation_overlay(UiContext& context, Rect bounds);
 

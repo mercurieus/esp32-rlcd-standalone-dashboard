@@ -496,7 +496,8 @@ void render_tray(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
   // two facts a glance can carry, and the exact charge figure now lives on the
   // settings page where it is the number a calibration is compared against.
   const WifiIconParts wifi =
-      wifi_icon(parent, cells.network, snapshot.setup.connected);
+      wifi_icon(parent, cells.network, wifi_icon_state(snapshot.setup),
+                context != nullptr ? context->wifi_blink_visible : true);
   // valid and charging passed separately, not collapsed into one bool: an
   // invalid reading draws an empty body (nothing measured); charging draws
   // the level bar with the bolt XOR'd over it, so a charging cell still
@@ -738,6 +739,25 @@ void update_clock_blink(UiContext& context,
   }
 }
 
+// Called every tick. Only a phase change, a state change or a page swap (the
+// icon parts are re-created on a rebuild) touches the widget.
+void update_wifi_icon_blink(UiContext& context,
+                            const app_core::AppSnapshot& snapshot,
+                            const uint64_t now_ms) {
+  if (!context_ready(context)) return;
+  const WifiIconState state = wifi_icon_state(snapshot.setup);
+  const bool visible = wifi_icon_visible(state, now_ms);
+  if (visible == context.wifi_blink_visible &&
+      state == context.wifi_applied_state &&
+      context.network_icon.connected == context.wifi_applied_icon) {
+    return;
+  }
+  context.wifi_blink_visible = visible;
+  context.wifi_applied_state = state;
+  context.wifi_applied_icon = context.network_icon.connected;
+  set_wifi_icon_state(context.network_icon, state, visible);
+}
+
 // Separate from update_visible_fields below, and called unconditionally on
 // every ~100 ms tick rather than only when a publish or a clock-minute
 // rollover happens to land on the same tick - see ui_app.cpp's
@@ -780,7 +800,8 @@ bool update_visible_fields(UiContext& context,
   update_visible_clock(context, snapshot);
   // In place, like the label path it replaces: a battery sample every 30s must
   // not cost a page rebuild, which is a visible full repaint on this panel.
-  set_wifi_icon_state(context.network_icon, snapshot.setup.connected);
+  set_wifi_icon_state(context.network_icon, wifi_icon_state(snapshot.setup),
+                      context.wifi_blink_visible);
   // See the initial-draw call site's own comment on valid vs. charging.
   set_battery_icon_level(
       context.battery_icon_parts, snapshot.battery.percent,

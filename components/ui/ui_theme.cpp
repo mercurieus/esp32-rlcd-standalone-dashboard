@@ -465,7 +465,8 @@ alignas(LV_DRAW_BUF_ALIGN) uint8_t g_wifi_slash_storage[
 
 // Two static I1 canvases share a tray cell. State updates change opacity only,
 // avoiding a page rebuild and its full-panel redraw.
-WifiIconParts wifi_icon(lv_obj_t* parent, Rect bounds, bool connected) {
+WifiIconParts wifi_icon(lv_obj_t* parent, Rect bounds, WifiIconState state,
+                        bool blink_visible) {
   WifiIconParts parts{};
 
   repack_i1_bits(kWifiHighBoldBitmap, g_wifi_high_storage,
@@ -488,15 +489,21 @@ WifiIconParts wifi_icon(lv_obj_t* parent, Rect bounds, bool connected) {
       app_core::kTrayIconSize, g_wifi_slash_storage, lv_color_white(),
       LV_OPA_TRANSP, lv_color_black());
 
-  set_wifi_icon_state(parts, connected);
+  set_wifi_icon_state(parts, state, blink_visible);
   return parts;
 }
 
-void set_wifi_icon_state(const WifiIconParts& parts, bool connected) {
+// Connecting shows the bars toggled by blink_visible (the slash never shows
+// while joining, so the cell is empty in the off phase); Off is the slash.
+void set_wifi_icon_state(const WifiIconParts& parts, WifiIconState state,
+                         bool blink_visible) {
+  const bool bars = state == WifiIconState::Connected ||
+                    (state == WifiIconState::Connecting && blink_visible);
+  const bool slash = state == WifiIconState::Off;
   set_style_opa_if_changed(parts.connected,
-                           connected ? LV_OPA_COVER : LV_OPA_TRANSP);
+                           bars ? LV_OPA_COVER : LV_OPA_TRANSP);
   set_style_opa_if_changed(parts.disconnected,
-                           connected ? LV_OPA_TRANSP : LV_OPA_COVER);
+                           slash ? LV_OPA_COVER : LV_OPA_TRANSP);
 }
 
 // LVGL's own row stride for an I1 canvas this wide - never recomputed as a

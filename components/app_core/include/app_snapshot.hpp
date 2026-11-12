@@ -272,6 +272,9 @@ struct Availability {
 struct SetupData {
   bool active = false;
   bool connected = false;
+  // True only while the provisioning state machine is in Connecting; the tray
+  // blinks its Wi-Fi icon on it. connected wins if both are ever set.
+  bool connecting = false;
   std::string ap_ssid;
   // Regenerated on every entry into setup mode and never persisted, so the
   // screen is the only place it exists. This is not a Wi-Fi credential - the
