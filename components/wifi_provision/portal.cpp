@@ -991,6 +991,54 @@ esp_err_t beep_sweep_post_handler(httpd_req_t* req) {
 const httpd_uri_t kBeepSweepPost = {"/beep-sweep", HTTP_POST,
                                     beep_sweep_post_handler, nullptr};
 
+// Plays one event's sound on demand, so every melody can be heard without
+// waiting for a real cable step or a flat battery. Debug builds only, same
+// gating and reasoning as /beep. POST /sound?event=<name>[&force=1]; the names
+// and the policy are main/sound_events.cpp's business (see
+// set_sound_test_handler), this only parses the query. 200 "played" or
+// "suppressed: <reason>", 400 for an unknown event or a missing one, 503 if no
+// handler is registered. Like /beep it reports that playback started, never
+// that it finished, and never blocks the httpd task.
+SoundTestResult (*g_sound_test_handler)(const char* event, bool force) = nullptr;
+
+esp_err_t sound_post_handler(httpd_req_t* req) {
+  char query[kMaxBeepQuery];
+  char event[24] = {};
+  const bool has_query =
+      httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK;
+  if (!has_query ||
+      httpd_query_key_value(query, "event", event, sizeof(event)) != ESP_OK) {
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                        "Missing or too long ?event=.");
+    return ESP_OK;
+  }
+  const bool force = query_int(query, "force", 0) != 0;
+  if (g_sound_test_handler == nullptr) {
+    httpd_resp_set_status(req, "503 Service Unavailable");
+    httpd_resp_sendstr(req, "No sound handler registered.\n");
+    return ESP_OK;
+  }
+  const SoundTestResult result = g_sound_test_handler(event, force);
+  switch (result.kind) {
+    case SoundTestResult::Kind::UnknownEvent:
+      httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Unknown event.");
+      return ESP_OK;
+    case SoundTestResult::Kind::Played:
+      httpd_resp_sendstr(req, "played\n");
+      return ESP_OK;
+    case SoundTestResult::Kind::Suppressed: {
+      char body[96];
+      snprintf(body, sizeof(body), "suppressed: %s\n", result.reason);
+      httpd_resp_sendstr(req, body);
+      return ESP_OK;
+    }
+  }
+  return ESP_OK;
+}
+
+const httpd_uri_t kSoundPost = {"/sound", HTTP_POST, sound_post_handler,
+                                nullptr};
+
 // Shows a static test card on the panel demonstrating ui::dither_bayer4x4_dark
 // (components/ui/include/dither.hpp) - a density ramp and a 50%-grey size
 // ramp, nothing real. Debug builds only, same reasoning as /shot/restart:
@@ -1087,7 +1135,7 @@ void portal_start() {
   // registration past the limit fails by returning an error rather than by
   // complaining, so a route added as the ninth would simply 404 with nothing
   // to explain why.
-  config.max_uri_handlers = 14;
+  config.max_uri_handlers = 16;
   // A firmware upload holds the socket for the length of the transfer, and a
   // release check waits on GitHub's TLS handshake.
   config.recv_wait_timeout = 20;
@@ -1112,7 +1160,7 @@ void portal_start() {
                                  &kOtaUrlPost, &kUpdateGet, &kUpdatePost,
 #ifndef NDEBUG
                                  &kShotGet,    &kRestartPost, &kBeepPost,
-                                 &kBeepSweepPost, &kDitherCardGet,
+                                 &kBeepSweepPost, &kSoundPost, &kDitherCardGet,
                                  &kForceChargingGet, &kBuildGet,
 #endif
   };
@@ -1138,6 +1186,13 @@ void set_screenshot_provider(bool (*provider)(uint8_t* out, size_t length)) {
   (void)provider;
 #endif
 }
+
+#ifndef NDEBUG
+void set_sound_test_handler(SoundTestResult (*handler)(const char* event,
+                                                       bool force)) {
+  g_sound_test_handler = handler;
+}
+#endif
 
 void portal_stop() {
   if (server_ != nullptr) {
