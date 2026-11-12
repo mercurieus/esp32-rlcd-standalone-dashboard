@@ -895,3 +895,23 @@ HOST_TEST(weather_qualifier_row_fits_its_widest_reading) {
   EXPECT_TRUE(ui::forecast_columns_layout_all_fit(forecast));
   EXPECT_TRUE(ui::forecast_columns_layout_all_disjoint(forecast));
 }
+
+// The page inset belongs to the title and header row. The chart used to take
+// it again on both sides, which cost 16 px of plot for no visual reason.
+HOST_TEST(indoor_plot_reclaims_the_page_inset) {
+  const ui::Rect content =
+      ui::content_bounds(ui::safe_canvas(), app_core::PageId::Indoor);
+  const ui::IndoorLayout layout = ui::indoor_layout(content);
+  EXPECT_EQ(layout.plot.width,
+            content.width - ui::kIndoorTemperatureScaleWidth -
+                ui::kIndoorHumidityScaleWidth);
+  EXPECT_EQ(layout.scale_left.x, content.x);
+  EXPECT_EQ(layout.scale_right.right(), content.right());
+  EXPECT_EQ(layout.axis.x, layout.plot.x);
+  EXPECT_EQ(layout.axis.width, layout.plot.width);
+  const ui::Rect safe = ui::safe_canvas();
+  EXPECT_TRUE(ui::rect_within(safe, layout.plot));
+  EXPECT_TRUE(ui::rect_within(safe, layout.scale_left));
+  EXPECT_TRUE(ui::rect_within(safe, layout.scale_right));
+  EXPECT_TRUE(ui::rect_within(safe, layout.axis));
+}
