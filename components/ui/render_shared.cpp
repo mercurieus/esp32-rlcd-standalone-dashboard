@@ -160,16 +160,22 @@ int text_width(const char* text, const lv_font_t* font) {
   return static_cast<int>(size.x);
 }
 
+}  // namespace
+
 // A tile's detail line: the words in small_font() (14 px) and the reading in
 // medium_font() (20 px), one label per part, sat on one baseline and centred
-// as a group in `row`. See DetailParts and fit_detail_caption in ui_data.hpp
-// for what the parts are and which gives way.
+// (or, with LV_TEXT_ALIGN_LEFT, started at the left) as a group in `row`. See
+// DetailParts and fit_detail_caption in ui_data.hpp for what the parts are
+// and which gives way. Outside the anonymous namespace because the weather
+// page's rain reading and its stale marker are the same mixed-size pair -
+// see render_weather.cpp.
 //
 // Each label is exactly its text's measured width plus label()'s 1 px inset
 // either side, and the labels abut rather than overlap: label() paints an
 // opaque white background, so an overlapping box would wipe the edge of the
 // glyph next to it.
-void tile_detail(lv_obj_t* parent, const DetailParts& parts, const Rect row) {
+void tile_detail(lv_obj_t* parent, const DetailParts& parts, const Rect row,
+                 const lv_text_align_t align) {
   const lv_font_t* words = small_font();
   const lv_font_t* reading = medium_font();
   // Baselines meet when the small box starts this much lower: each label's
@@ -222,7 +228,9 @@ void tile_detail(lv_obj_t* parent, const DetailParts& parts, const Rect row) {
   // Centred; a value too wide for the row on its own (none measured is) starts
   // at the row's left edge and is ellipsised by its label rather than pushed
   // off the left of the tile.
-  int x = row.x + std::max(0, (row.width - total) / 2);
+  int x = align == LV_TEXT_ALIGN_LEFT
+              ? row.x
+              : row.x + std::max(0, (row.width - total) / 2);
   for (int i = 0; i < 4; ++i) {
     if (widths[i] == 0) continue;
     const bool small = pieces[i].font == words;
@@ -236,6 +244,8 @@ void tile_detail(lv_obj_t* parent, const DetailParts& parts, const Rect row) {
     if (i == 1 && !parts.value.empty()) x += gap;
   }
 }
+
+namespace {
 
 // `valid` gates the fabricated-number path once, here, for every caller
 // (Home's situational tile and the market-page/indoor-page sidebar tiles

@@ -141,6 +141,12 @@ void reset_context(UiContext& context);
 void render_home(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
                  Rect bounds, std::size_t page_index,
                  std::size_t page_count, UiContext* context = nullptr);
+// A reading at font_medium() with its words at font_small() on one baseline -
+// a Home tile's detail line, and the weather page's rain reading with its
+// stale marker. Centred in `row` by default; LV_TEXT_ALIGN_LEFT starts it at
+// the row's left edge. See render_shared.cpp.
+void tile_detail(lv_obj_t* parent, const DetailParts& parts, Rect row,
+                 lv_text_align_t align = LV_TEXT_ALIGN_CENTER);
 void render_right_tiles(lv_obj_t* parent,
                         const app_core::AppSnapshot& snapshot, Rect bounds);
 void render_market_sidebar(lv_obj_t* parent,

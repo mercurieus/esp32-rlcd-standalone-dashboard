@@ -1071,13 +1071,89 @@ constexpr std::array<Rect, 7> forecast_columns(const Rect bounds) {
 // x/y/width/height, the same convention weather_forecast_rect callers rely
 // on, so this works for both the zero-offset frame render_weather.cpp builds
 // with and the absolute safe_canvas() frame the static_asserts below use.
-inline constexpr int kForecastTopOffset = 82;
+//
+// 86, not the 82 it was: the qualifier readings above went to 20 px and the
+// header grew - see weather_header_layout below. 86 is the last line the
+// forecast can start on; forecast_columns_layout_all_fit is what says so.
+inline constexpr int kForecastTopOffset = 86;
 inline constexpr int kForecastSideInset = 8;
 
 constexpr Rect weather_forecast_rect(const Rect content) {
   return {content.x + kForecastSideInset, content.y + kForecastTopOffset,
           content.width - 2 * kForecastSideInset,
           std::max(1, content.bottom() - content.y - kForecastTopOffset)};
+}
+
+// The weather page's header below its headline (condition and temperature,
+// y + 4 .. y + 39): the city with its fetch time on the left, and the two
+// qualifiers - what it feels like, the chance of rain - on the right, then the
+// divider over the forecast.
+//
+// The qualifiers are two stacked pairs, caption at 14 px over reading at 20.
+// The spec asked for the readings at 20 and for the first arrangement that
+// fits every worst case, tried in order (scripts/measure-text.py; slot = text
+// rounded up + label()'s 2 px of inset):
+//
+//   "FEELS" 47 @14, "-40.0°C" 78 @20, "RAIN" 39 @14, "100%" 53 @20,
+//   " OLD" 38 @14 (" 過期" 34), separators 2 px each, in a 186 px box
+//
+//   1. one line, readings at 20:            261 px stale, 223 fresh - no
+//      (with the brief's "-24.1°C", 70:     253 / 215 - still no)
+//   2. the same at whole degrees, "-40°C" 60: 243 px stale, 205 fresh - no
+//   3. stacked pairs: FEELS over its reading needs 78, RAIN over "100% OLD"
+//      needs 91, 169 of 186 - yes.
+//
+// "-40.0°C" because it is the widest reading of every one from -40.0 to
+// 50.0 °C, measured one by one; "-24.4°C", 73.3, is the widest a Chernivtsi
+// winter is likely to produce. Fixed columns rather than packing to the text,
+// so a reading does not shift sideways every time it changes.
+//
+// Stacking costs height: an 18 px caption box over a 24 px reading box. The
+// caption row is the city's row (both at y + 41, both 14 px, so they share a
+// baseline) and the reading row starts where it ends, so the divider moves
+// from y + 70 to y + 83, under the reading box. The forecast only had 4 px to
+// give - its seven rows need 154 px of the 240 the page has, see
+// forecast_column_layout - so it moves from y + 82 to y + 86, its last
+// possible line, and the gap above it shrinks from 11 px to 2. The reading's
+// ink ends at about y + 78 and the forecast's weekday ink starts at about
+// y + 90, so the divider still has air on both sides.
+inline constexpr int kWeatherHeaderTop = 41;
+inline constexpr int kWeatherQualifierLeft = 198;
+inline constexpr int kWeatherQualifierRightInset = 4;
+// The rain column, flush right: "100%" + " OLD" is 91 px, and the 9 left
+// over sit at the column's right, so RAIN and its reading line up with
+// FEELS and its own on the left of each column.
+inline constexpr int kWeatherRainColumnWidth = 100;
+inline constexpr int kWeatherCaptionHeight =
+    safe_text_box_height(18, kSetupSmallFontLineHeight);
+inline constexpr int kWeatherReadingHeight =
+    safe_text_box_height(24, kSetupMediumFontLineHeight);
+
+struct WeatherHeaderLayout {
+  Rect location;
+  Rect feels_caption;
+  Rect feels_value;
+  Rect rain_caption;
+  Rect rain_value;
+  Rect divider;
+};
+
+constexpr WeatherHeaderLayout weather_header_layout(const Rect content) {
+  const int top = content.y + kWeatherHeaderTop;
+  const int reading_top = top + kWeatherCaptionHeight;
+  const int left = content.x + kWeatherQualifierLeft;
+  const int right = content.right() - kWeatherQualifierRightInset;
+  const int rain_x = right - kWeatherRainColumnWidth;
+  const int feels_width = rain_x - left;
+  return {
+      // 126 px against "Chernivtsi 02:02", 113.6 @14 -> 116.
+      {content.x + 68, top, 126, 20},
+      {left, top, feels_width, kWeatherCaptionHeight},
+      {left, reading_top, feels_width, kWeatherReadingHeight},
+      {rain_x, top, kWeatherRainColumnWidth, kWeatherCaptionHeight},
+      {rain_x, reading_top, kWeatherRainColumnWidth, kWeatherReadingHeight},
+      {content.x + 8, reading_top + kWeatherReadingHeight,
+       content.width - 16, kSeparatorWidth}};
 }
 
 struct ForecastColumnLayout {
