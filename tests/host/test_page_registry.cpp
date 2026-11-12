@@ -213,13 +213,13 @@ HOST_TEST(mock_fixture_contains_required_deterministic_content) {
   EXPECT_EQ(snapshot.new_york_weather.current.rain_probability_percent, 15);
   EXPECT_EQ(snapshot.weather.seven_day.size(), static_cast<size_t>(7));
   const std::array<app_core::WeatherDay, 7> expected_forecast = {{
-      {"Sat", "Cloudy", 30.0, 25.0, 25},
-      {"Sun", "Rain", 28.0, 24.0, 70},
-      {"Mon", "Rain", 27.0, 23.0, 65},
-      {"Tue", "Cloudy", 29.0, 24.0, 35},
-      {"Wed", "Sunny", 31.0, 25.0, 10},
-      {"Thu", "Cloudy", 30.0, 25.0, 30},
-      {"Fri", "Sunny", 32.0, 26.0, 5},
+      {"Sat", 0, "Cloudy", 30.0, 25.0, 25},
+      {"Sun", 0, "Rain", 28.0, 24.0, 70},
+      {"Mon", 0, "Rain", 27.0, 23.0, 65},
+      {"Tue", 0, "Cloudy", 29.0, 24.0, 35},
+      {"Wed", 0, "Sunny", 31.0, 25.0, 10},
+      {"Thu", 0, "Cloudy", 30.0, 25.0, 30},
+      {"Fri", 0, "Sunny", 32.0, 26.0, 5},
   }};
   for (size_t i = 0; i < expected_forecast.size(); ++i) {
     EXPECT_EQ(snapshot.weather.seven_day[i].day, expected_forecast[i].day);
