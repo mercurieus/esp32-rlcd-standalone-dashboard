@@ -420,12 +420,12 @@ HOST_TEST(home_tile_cells_split_the_column_without_overlapping) {
   EXPECT_TRUE(bottom.bottom() <= column.bottom());   // stays in the column
   EXPECT_EQ(top.height, bottom.height);              // evenly split
   // Each half still has room for tile_text_layout's actual stacked content
-  // (title+value+detail = kTileContentHeight, ui_theme.hpp) - not a
+  // (title+value+drop+detail = kTileBlockHeight, ui_theme.hpp) - not a
   // separately-guessed number. A hardcoded "big enough" figure here would
   // prove nothing about the content this cell is actually for, which is
   // exactly the gap that let the settings page's status line overflow
   // unnoticed (see ui_data.hpp's settings_layout_fits / kSettingsRowHeight).
-  EXPECT_TRUE(top.height >= ui::kTileContentHeight);
+  EXPECT_TRUE(top.height >= ui::kTileBlockHeight);
 }
 
 // settings_layout_fits existed for a while covering every rect the layout
@@ -717,4 +717,125 @@ HOST_TEST(trust_line_keeps_the_rtc_and_unsynced_warnings) {
   clock.source = "";
   EXPECT_EQ(ui::clock_trust_line(clock, kSyncAt),
             std::string(ui::text(ui::Text::ClockNotSynced)));
+}
+
+// --- Home tile detail row: caption 14 px, reading 20 px -------------------
+//
+// Widths are in the renderer's slot convention (see fit_detail_caption in
+// ui_data.hpp): each part is its measured text width rounded up, plus the
+// 2 px its label's inset adds, and the caption also carries the 2 px gap to
+// the value. Text widths are from `python scripts/measure-text.py` (font
+// tables, no kerning, so they read wide). The box is a half-width Home
+// tile's detail row, 178 px (190 cell - 2 x 6 inset).
+
+HOST_TEST(caption_is_kept_when_everything_fits) {
+  // "Snow Showers" 104.4 @14 -> 105 + 2 + 2 = 109;
+  // "~-24°C" 67.0 @20 -> 67 + 2 = 69. 178 of 178.
+  EXPECT_TRUE(ui::fit_detail_caption(0, 109, 69, 0, 178,
+                                     ui::kTileDetailMinCaptionPx) ==
+              ui::CaptionFit::Full);
+}
+
+HOST_TEST(caption_gives_way_to_old_marker) {
+  // + " OLD" 35.4 @14 -> 36 + 2 = 38: 216 of 178. The value and the marker
+  // keep their 107; the condition gets the 71 left, above the minimum.
+  EXPECT_TRUE(ui::fit_detail_caption(0, 109, 69, 38, 178,
+                                     ui::kTileDetailMinCaptionPx) ==
+              ui::CaptionFit::Ellipsised);
+}
+
+HOST_TEST(caption_is_dropped_before_the_value_with_alert_and_old) {
+  // + "ALERT  " 53.8 @14 -> 54 + 2 = 56: 272 of 178. 15 px left for the
+  // condition is less than "Sno..." needs, so it goes - value, OLD and ALERT
+  // all still render.
+  EXPECT_TRUE(ui::fit_detail_caption(56, 109, 69, 38, 178,
+                                     ui::kTileDetailMinCaptionPx) ==
+              ui::CaptionFit::Dropped);
+}
+
+HOST_TEST(caption_fit_never_reports_full_for_a_caption_that_overflows) {
+  // Exactly at the minimum still ellipsises; one pixel under drops.
+  const int min = ui::kTileDetailMinCaptionPx;
+  EXPECT_TRUE(ui::fit_detail_caption(0, 200, 100, 0, 100 + min, min) ==
+              ui::CaptionFit::Ellipsised);
+  EXPECT_TRUE(ui::fit_detail_caption(0, 200, 100, 0, 100 + min - 1, min) ==
+              ui::CaptionFit::Dropped);
+  // No caption at all is trivially Full, whatever else is on the row.
+  EXPECT_TRUE(ui::fit_detail_caption(56, 0, 69, 38, 178, min) ==
+              ui::CaptionFit::Full);
+}
+
+HOST_TEST(ellipsised_caption_fits_its_budget_and_keeps_a_stem) {
+  // One "pixel" per byte keeps the arithmetic visible.
+  const auto width = [](const std::string& s) {
+    return static_cast<int>(s.size());
+  };
+  EXPECT_EQ(ui::ellipsise_to_width("Snow Showers", 12, width),
+            std::string("Snow Showers"));
+  EXPECT_EQ(ui::ellipsise_to_width("Snow Showers", 9, width),
+            std::string("Snow S..."));
+  // A trailing space is not left in front of the dots.
+  EXPECT_EQ(ui::ellipsise_to_width("Snow Showers", 7, width),
+            std::string("Snow..."));
+  EXPECT_EQ(ui::ellipsise_to_width("Snow Showers", 3, width), std::string());
+  // UTF-8 is cut on a code point boundary, never mid-sequence.
+  EXPECT_EQ(ui::ellipsise_to_width("\xE9\x9B\xBB\xE5\xA3\x93\xE9\x81\x8E", 6,
+                                   width),
+            std::string("\xE9\x9B\xBB..."));
+}
+
+HOST_TEST(weather_tile_detail_splits_into_parts_for_the_worst_case) {
+  ui::set_language(ui::Language::English);
+  app_core::AppSnapshot snapshot;
+  snapshot.weather.valid = true;
+  snapshot.weather.alert = true;
+  snapshot.weather.stale = true;
+  snapshot.weather.current.condition = "Snow Showers";
+  snapshot.weather.current.has_feels_like = true;
+  snapshot.weather.current.feels_like_c = -24.0;
+  const ui::DetailParts parts =
+      ui::home_tile_detail_parts(snapshot, ui::HomeTileKind::Weather);
+  EXPECT_EQ(parts.prefix, std::string("ALERT  "));
+  EXPECT_EQ(parts.caption, std::string("Snow Showers"));
+  EXPECT_EQ(parts.value, std::string("~-24\xC2\xB0" "C"));
+  EXPECT_EQ(parts.suffix, std::string(" OLD"));
+
+  // No feels-like: the condition is the whole line, with nothing at 20 px.
+  snapshot.weather.current.has_feels_like = false;
+  snapshot.weather.alert = false;
+  snapshot.weather.stale = false;
+  const ui::DetailParts bare =
+      ui::home_tile_detail_parts(snapshot, ui::HomeTileKind::Weather);
+  EXPECT_EQ(bare.caption, std::string("Snow Showers"));
+  EXPECT_TRUE(bare.value.empty() && bare.prefix.empty() &&
+              bare.suffix.empty());
+}
+
+HOST_TEST(other_tile_details_split_reading_from_words) {
+  ui::set_language(ui::Language::English);
+  app_core::AppSnapshot snapshot;
+  snapshot.indoor.valid = true;
+  snapshot.indoor.humidity_percent = 100;
+  const ui::DetailParts indoor =
+      ui::home_tile_detail_parts(snapshot, ui::HomeTileKind::Indoor);
+  EXPECT_EQ(indoor.caption, std::string("RH"));
+  EXPECT_EQ(indoor.value, std::string("100%"));
+
+  snapshot.ua_fx.has_change = true;
+  snapshot.ua_fx.primary_change_percent = -0.12;
+  const ui::DetailParts market =
+      ui::home_tile_detail_parts(snapshot, ui::HomeTileKind::Market);
+  EXPECT_TRUE(market.caption.empty());
+  EXPECT_EQ(market.value, std::string("-0.12%"));
+  snapshot.ua_fx.has_change = false;
+  EXPECT_TRUE(
+      ui::home_tile_detail_parts(snapshot, ui::HomeTileKind::Market)
+          .value.empty());
+
+  // A word, not a reading: stays a 14 px caption with no value.
+  snapshot.battery.overvoltage_warning = true;
+  const ui::DetailParts battery =
+      ui::home_tile_detail_parts(snapshot, ui::HomeTileKind::Battery);
+  EXPECT_EQ(battery.caption, std::string("OVERVOLTAGE"));
+  EXPECT_TRUE(battery.value.empty());
 }
