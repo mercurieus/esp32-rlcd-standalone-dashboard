@@ -26,6 +26,7 @@
 #include "ota_pull.hpp"
 #include "ota_release.hpp"
 #include "ota_session.hpp"
+#include "restart_hook.hpp"
 #include "wifi_provision.hpp"
 
 #include <memory>
@@ -135,7 +136,14 @@ void report_ota_failure(const char* reason) {
   set_ota(data);
 }
 
-void restart_timer_fired(void*) { esp_restart(); }
+// Runs in the esp_timer task. The farewell melody blocks it for under 1 s
+// (a 300 ms wait for the playback slot at most, plus a melody under 1 s) right
+// before the restart - acceptable: the HTTP response has already drained (see
+// schedule_restart) and the chip is about to reset anyway.
+void restart_timer_fired(void*) {
+  app_core::run_before_restart();
+  esp_restart();
+}
 
 // Rebooting inside the request handler drops the socket mid-response, so the
 // phone reports a network error for an update that in fact succeeded. Answer
@@ -148,6 +156,7 @@ void schedule_restart() {
   args.name = "ota_restart";
   if (esp_timer_create(&args, &timer) != ESP_OK) {
     ESP_LOGE(kTag, "restart timer unavailable; restarting immediately");
+    app_core::run_before_restart();
     esp_restart();
   }
   (void)esp_timer_start_once(timer, 1'500'000);

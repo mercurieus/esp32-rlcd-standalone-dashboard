@@ -46,6 +46,10 @@ constexpr audio::Note kFarewellMelody[] = {
 static_assert(audio::notes_duration_ms(kFarewellMelody,
                                        std::size(kFarewellMelody)) < 1000,
               "farewell melody must stay under 1 s");
+// How long the farewell may wait for a sound already playing - typically the
+// button tick of the press that triggered the restart - before it skips. The
+// restart is delayed by at most this plus the melody.
+constexpr uint32_t kFarewellMaxWaitMs = 300;
 
 // Power lost: two falling notes, G6 then C6 - the tail of the farewell, so it
 // reads as "going away" without being the full shutdown sound.
@@ -225,7 +229,7 @@ void on_button() {
 void play_farewell_blocking() {
   if (!allowed(SoundEvent::Farewell)) return;
   const esp_err_t result = audio::audio_try_play_notes_blocking(
-      kFarewellMelody, std::size(kFarewellMelody));
+      kFarewellMelody, std::size(kFarewellMelody), kFarewellMaxWaitMs);
   if (result != ESP_OK) {
     ESP_LOGI(kTag, "farewell sound did not play: %s", esp_err_to_name(result));
   }

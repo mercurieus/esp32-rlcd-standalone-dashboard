@@ -157,6 +157,9 @@ int g_volume_percent = kOutputVolumePercent;
 // read unlocked by the refusal check, which is a best-effort early exit - the
 // async path's claim_playback_slot() is what actually excludes a stream.
 bool g_stream_open = false;
+// The one-playback-at-a-time slot; see claim_playback_slot() for the rules. Created
+// by audio_init(), declared here because audio_init() precedes that block.
+SemaphoreHandle_t g_playback_busy = nullptr;
 // Separate from the codec's own I2C control handle (owned internally by
 // audio_codec_new_i2c_ctrl in setup_codec()): this one exists purely so
 // dump_registers() can issue plain register reads without reaching into
@@ -523,6 +526,18 @@ void quiesce_for_ota() {
 esp_err_t audio_init() {
   if (g_codec_dev != nullptr) return ESP_OK;
 
+  // The playback slot (see claim_playback_slot()): created here, once, before
+  // anything can claim it. Kept across a failed init and a retry - it is only
+  // ever created while null, so a second audio_init() does not make another.
+  if (g_playback_busy == nullptr) {
+    g_playback_busy = xSemaphoreCreateBinary();
+    if (g_playback_busy == nullptr) {
+      ESP_LOGW(kTag, "playback semaphore allocation failed: sound unavailable");
+      return ESP_ERR_NO_MEM;
+    }
+    xSemaphoreGive(g_playback_busy);  // seed with one token: "available"
+  }
+
   // Registered unconditionally, before anything hardware-dependent below
   // that could fail: the tray reserves this module's icon slot regardless
   // of whether the codec turns out to be present, so the tray's layout
@@ -719,7 +734,7 @@ namespace {
 // claims the slot immediately or refuses immediately, which is "refuse
 // cleanly", not "block until free" (that would just turn the HTTP task's
 // blocking problem into a task-pool blocking problem).
-SemaphoreHandle_t g_playback_busy = nullptr;
+// (g_playback_busy is declared with the codec state at the top of this file.)
 constexpr uint32_t kPlaybackTaskStackBytes = 4096;
 // I2S and I2C only - audio_play_tone()/audio_play_diagnostic_sweep() never
 // touch flash, so this stack can live in PSRAM (xTaskCreateWithCaps below)
@@ -736,17 +751,15 @@ constexpr uint32_t kPlaybackTaskStackBytes = 4096;
 // fix and PSRAM is the right one.
 constexpr UBaseType_t kPlaybackTaskCaps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
 
-// Lazily created on first use rather than at audio_init() time - nothing
-// needs it before the first play request, and an audio_init() that fails
-// partway must not leave a semaphore allocated for a codec that was never
-// actually set up.
-bool claim_playback_slot() {
-  if (g_playback_busy == nullptr) {
-    g_playback_busy = xSemaphoreCreateBinary();
-    if (g_playback_busy == nullptr) return false;
-    xSemaphoreGive(g_playback_busy);  // seed with one token: "available"
-  }
-  return xSemaphoreTake(g_playback_busy, 0) == pdTRUE;
+// Created once, in audio_init(), never lazily: two tasks racing for the first
+// sound used to be able to create two semaphores (the check-then-create had no
+// lock), each task then "owning" the slot on its own. A claim made before
+// audio_init() - or after one that failed before reaching this point - finds
+// no semaphore and refuses cleanly, which is also what every play function's
+// own g_codec_dev check says.
+bool claim_playback_slot(TickType_t wait_ticks = 0) {
+  if (g_playback_busy == nullptr) return false;
+  return xSemaphoreTake(g_playback_busy, wait_ticks) == pdTRUE;
 }
 
 struct ToneRequest {
@@ -999,7 +1012,8 @@ esp_err_t audio_play_notes_async(const Note* notes, size_t count) {
   return ESP_OK;
 }
 
-esp_err_t audio_try_play_notes_blocking(const Note* notes, size_t count) {
+esp_err_t audio_try_play_notes_blocking(const Note* notes, size_t count,
+                                        uint32_t wait_ms) {
   if (g_codec_dev == nullptr) {
     ESP_LOGW(kTag,
              "audio_try_play_notes_blocking called before a successful audio_init()");
@@ -1012,12 +1026,14 @@ esp_err_t audio_try_play_notes_blocking(const Note* notes, size_t count) {
              static_cast<unsigned>(count));
     return ESP_ERR_INVALID_ARG;
   }
-  // Zero-wait claim, not a blocking take: the caller is about to restart the
-  // chip, and a restart that waits on a stream of unknown length (or on a
-  // button tick that happens to be playing) is worse than a silent one. A
-  // stream holds this slot for its whole session, so this also refuses
-  // mid-stream; audio_play_notes() re-checks g_stream_open regardless.
-  if (!claim_playback_slot()) {
+  // Bounded wait, not an unbounded take: the caller is about to restart the
+  // chip, and a restart that waits on a stream of unknown length is worse than
+  // a silent one. wait_ms is how long a short sound already playing (the button
+  // tick from the press that caused the restart) may take to finish; 0 refuses
+  // at once. A stream holds this slot for its whole session, so a wait that
+  // outlasts wait_ms refuses mid-stream; audio_play_notes() re-checks
+  // g_stream_open regardless.
+  if (!claim_playback_slot(pdMS_TO_TICKS(wait_ms))) {
     ESP_LOGW(kTag, "audio_try_play_notes_blocking refused: playback already in progress");
     return ESP_ERR_INVALID_STATE;
   }

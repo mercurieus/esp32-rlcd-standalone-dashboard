@@ -22,6 +22,7 @@
 #include "ota_release.hpp"
 #include "ota_session.hpp"
 #include "shtc3.hpp"
+#include "restart_hook.hpp"
 #include "sound_events.hpp"
 #include "ui_app.hpp"
 #include "weather.hpp"
@@ -1808,6 +1809,9 @@ extern "C" void app_main() {
   // policy treats as quiet: no chime.
   sound_events::set_boot_clock(clock, rtc_ok);
   sound_events::init(static_cast<int>(reset_reason));
+  // Every firmware-initiated esp_restart() (OTA accept, portal reboot) says
+  // goodbye through this first.
+  app_core::set_before_restart_hook(&sound_events::play_farewell_blocking);
 
   if (!ui::start(snapshot, clock, !rtc_ok)) {
     fatal_loop("UI lifecycle initialization failed", ESP_FAIL);

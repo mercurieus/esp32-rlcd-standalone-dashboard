@@ -12,6 +12,7 @@
 #include <memory>
 
 #include "ota_session.hpp"
+#include "restart_hook.hpp"
 
 namespace ota {
 namespace {
@@ -221,6 +222,7 @@ void pull_task(void* argument) {
   const PullResult result = pull_from_url(*url);
   if (result == PullResult::Armed) {
     ESP_LOGW(kTag, "pulled firmware armed; restarting");
+    app_core::run_before_restart();  // farewell melody, if allowed
     esp_restart();  // Does not return; nothing left to release.
   }
   // pull_from_url already put the reason on the panel. Nothing to reboot for;
