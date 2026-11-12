@@ -174,8 +174,11 @@ hard to read from a distance. The operator asked for **at least the values
   value 20) is ~172 px and fits; with ` OLD` it is ~205 px and with the
   `ALERT  ` prefix ~260 px (that one already overflows at all-14 today). In
   those cases the condition word ellipsises or is dropped first; the value,
-  `OLD` and `ALERT` always render. The tile's 18 px detail-row height is not
-  changed.
+  `OLD` and `ALERT` always render. The tile's detail row (`kTileDetailHeight`,
+  18 px) **must grow** to `safe_text_box_height(18, 22)` for a 20 px value -
+  corrected during planning; the original line here said it would not change,
+  which cannot hold. The extra height comes from below the tile, never from
+  the leading weather icon's box.
 - **All tiles' detail-row readings get the same treatment** (**builder's
   call**): the Indoor tile (`RH 55%`) and Market tile (`+0.12%`) share the row
   with the weather tile when two tiles show, so their values also go to 20 on
