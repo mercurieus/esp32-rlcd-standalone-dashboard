@@ -49,6 +49,12 @@ enum class SettingsItem : uint8_t {
   // deliberately: nothing happens when you select it, so of every row in the
   // menu this is the one a press should least often have to walk past.
   Firmware,
+  // The station's IPv4 address, or "--" with no lease. Display only, last
+  // because it is the row read least and only when something is being
+  // reached over the network (a firmware push, the portal). It exists because
+  // the address otherwise lives only in a serial log or the router's client
+  // list, neither of which is at hand when the board is on a shelf.
+  Ip,
   Count,
 };
 
@@ -183,7 +189,7 @@ class SettingsMenu {
   // to go back up, a cursor that stops at the bottom is a cursor you cannot
   // return from.
   //
-  // Skips Runtime, Battery, and Firmware: all three are display-only (see
+  // Skips Runtime, Battery, Firmware and Ip: all four are display-only (see
   // activate() in the .cpp), so landing the cursor on one would just be a
   // press that does nothing. They still render in place - see
   // settings_item_label() - only the cursor treats them as if they were not

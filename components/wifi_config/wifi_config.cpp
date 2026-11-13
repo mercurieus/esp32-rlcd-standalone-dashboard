@@ -190,4 +190,10 @@ void StateMachine::on_credentials_saved() {
   retries_ = 0;
 }
 
+std::string published_station_ip(StateMachine::State state,
+                                 std::string_view ip) {
+  return state == StateMachine::State::Connected ? std::string(ip)
+                                                 : std::string();
+}
+
 }  // namespace wifi_config

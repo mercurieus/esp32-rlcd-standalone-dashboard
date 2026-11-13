@@ -294,3 +294,36 @@ HOST_TEST(state_machine_on_disconnected_is_reason_agnostic_five_reach_setup_ap) 
   EXPECT_TRUE(machine.state() == StateMachine::State::SetupAp);
   EXPECT_EQ(machine.retries(), StateMachine::kMaxRetries);
 }
+
+// SetupData::ip feeds the Settings IP row. A lease is not announced when it is
+// lost, so the published address is decided by the state, not by whatever
+// string was remembered last: only Connected may carry one.
+HOST_TEST(published_station_ip_is_empty_unless_connected) {
+  using State = StateMachine::State;
+  EXPECT_TRUE(wifi_config::published_station_ip(State::Connected,
+                                                "192.168.1.210") ==
+              "192.168.1.210");
+  EXPECT_TRUE(wifi_config::published_station_ip(State::Connecting,
+                                                "192.168.1.210")
+                  .empty());
+  EXPECT_TRUE(wifi_config::published_station_ip(State::SetupAp,
+                                                "192.168.1.210")
+                  .empty());
+  // Connected with no address yet (the state flips before the string is
+  // stored in no ordering we rely on) stays empty rather than inventing one.
+  EXPECT_TRUE(wifi_config::published_station_ip(State::Connected, "").empty());
+
+  // Walk the real machine: every state it can reach, not just the ones named.
+  StateMachine machine(true);
+  EXPECT_TRUE(wifi_config::published_station_ip(machine.state(), "10.0.0.5")
+                  .empty());  // Connecting
+  machine.on_connected();
+  EXPECT_TRUE(wifi_config::published_station_ip(machine.state(), "10.0.0.5") ==
+              "10.0.0.5");
+  machine.on_disconnected();
+  EXPECT_TRUE(wifi_config::published_station_ip(machine.state(), "10.0.0.5")
+                  .empty());  // back to Connecting
+  machine.on_setup_gesture();
+  EXPECT_TRUE(wifi_config::published_station_ip(machine.state(), "10.0.0.5")
+                  .empty());  // SetupAp
+}

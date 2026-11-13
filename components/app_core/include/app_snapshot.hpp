@@ -283,6 +283,12 @@ struct SetupData {
   std::string portal_url;
   std::string qr_payload;
   std::string status;
+  // The station's dotted-quad IPv4 address, e.g. "192.168.1.210". Non-empty
+  // only while the state is Connected: it is cleared on every other state so
+  // the Settings IP row shows "--" rather than the address of a lease that is
+  // gone. Carried here, and not read from esp_netif by the UI, so the UI stays
+  // free of the network stack.
+  std::string ip;
   // True only for a genuine failure status (wrong password, network not
   // found, generic connect failure) so the UI can render it more
   // prominently than neutral progress without sniffing the status string.

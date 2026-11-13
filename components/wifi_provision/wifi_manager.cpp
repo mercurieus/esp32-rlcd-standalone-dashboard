@@ -7,6 +7,7 @@
 #include <esp_wifi_default.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 
 namespace wifi_provision {
@@ -125,7 +126,11 @@ void ip_event_handler(void*, esp_event_base_t, int32_t event_id,
   if (event_id == IP_EVENT_STA_GOT_IP) {
     const auto* event = static_cast<ip_event_got_ip_t*>(event_data);
     ESP_LOGI(kTag, "sta got ip: " IPSTR, IP2STR(&event->ip_info.ip));
-    handle_wifi_connected();
+    // Formatted here, where esp_netif's types are already in scope, so the
+    // snapshot (and through it the UI) only ever sees a string.
+    char ip[16];  // "255.255.255.255" + NUL
+    std::snprintf(ip, sizeof(ip), IPSTR, IP2STR(&event->ip_info.ip));
+    handle_wifi_connected(ip);
   }
 }
 

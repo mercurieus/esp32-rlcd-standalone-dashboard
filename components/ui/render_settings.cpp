@@ -11,7 +11,8 @@ namespace {
 // action rather than a setting - "check for updates" has no current value, and
 // inventing one would make it look like a reading.
 std::string row_value(SettingsItem item, const app_core::BatteryData& battery,
-                      const app_core::RuntimeEstimate& runtime) {
+                      const app_core::RuntimeEstimate& runtime,
+                      const app_core::SetupData& setup) {
   switch (item) {
     case SettingsItem::Language:
       return language_name(ui::language());
@@ -104,6 +105,15 @@ std::string row_value(SettingsItem item, const app_core::BatteryData& battery,
                     desc->app_elf_sha256[6], desc->app_elf_sha256[7]);
       return buffer;
     }
+    case SettingsItem::Ip:
+      // "--" for no address, the same marker Runtime and Battery use for a
+      // value that is absent rather than zero. SetupData::ip is empty in every
+      // state but Connected, so a stale lease is never shown.
+      //
+      // Widest value "255.255.255.255" measures 106.3px at font_small()
+      // (scripts/measure-text.py --font montserrat_14), inside
+      // kSettingsValueWidth (150px); a typical "192.168.1.210" is 82.0px.
+      return setup.ip.empty() ? std::string("--") : setup.ip;
     case SettingsItem::WifiSetup:
     case SettingsItem::Count:
       break;
@@ -156,7 +166,7 @@ void render_settings(lv_obj_t* parent, const app_core::AppSnapshot& snapshot,
     if (is_focused) apply_setup_status_style(label_obj, true);
 
     const std::string value =
-        row_value(item, snapshot.battery, snapshot.battery_runtime);
+        row_value(item, snapshot.battery, snapshot.battery_runtime, snapshot.setup);
     if (!value.empty()) {
       const Rect value_rect{row.right() - kSettingsValueWidth, row.y,
                             kSettingsValueWidth, row.height};

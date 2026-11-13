@@ -59,7 +59,8 @@ void wifi_manager_reconnect_sta();
 std::array<uint8_t, 6> wifi_manager_ap_mac();
 
 // --- wifi_provision.cpp, called from wifi_manager.cpp's event handlers ---
-void handle_wifi_connected();
+// ip is the dotted-quad station address from IP_EVENT_STA_GOT_IP.
+void handle_wifi_connected(const std::string& ip);
 void handle_wifi_disconnected(DisconnectReason reason);
 
 // --- wifi_provision.cpp, read/called by portal.cpp ---
