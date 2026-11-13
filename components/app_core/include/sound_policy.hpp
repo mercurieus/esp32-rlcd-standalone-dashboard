@@ -120,4 +120,32 @@ class BatteryAlarm {
   bool critical_armed_ = false;
 };
 
+// How long a boot melody may wait for the clock to become trusted. A power-on
+// finds the RTC empty (this unit loses time across a power-off), so at init()
+// the clock is untrusted and the policy refuses; SNTP lands a few seconds
+// later (measured: ~3 s after boot). 60 s covers a slow join, and a boot that
+// never syncs stays silent rather than chiming at some unrelated later moment.
+constexpr uint64_t kBootSoundWindowMs = 60'000;
+
+// The deferred boot melody: defer() at init() when only the clock stopped it,
+// take() once the clock is trusted. take() is true at most once per defer()
+// and clears the pending flag on any call, so repeated calls are harmless.
+// Not thread-safe: init() runs before the one task that calls take().
+struct BootSoundGate {
+  void defer(uint64_t now_ms) {
+    pending_ = true;
+    deadline_ms_ = now_ms + kBootSoundWindowMs;
+  }
+  bool pending() const { return pending_; }
+  bool take(uint64_t now_ms) {
+    if (!pending_) return false;
+    pending_ = false;
+    return now_ms < deadline_ms_;
+  }
+
+ private:
+  bool pending_ = false;
+  uint64_t deadline_ms_ = 0;
+};
+
 }  // namespace app_core

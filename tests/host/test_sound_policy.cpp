@@ -186,3 +186,40 @@ HOST_TEST(restart_hook_without_registration_is_harmless) {
   app_core::run_before_restart();
   EXPECT_TRUE(true);
 }
+
+// Task 15: a power-on boot has an untrusted clock at init() (the RTC loses
+// time across a power-off), so the melody is deferred, not dropped, and played
+// when SNTP lands - but only inside a window, so a boot that never syncs does
+// not chime at some random later moment.
+HOST_TEST(boot_gate_defer_then_take_once) {
+  app_core::BootSoundGate gate;
+  gate.defer(1'000);
+  EXPECT_TRUE(gate.take(4'000));
+  EXPECT_TRUE(!gate.take(4'100));
+}
+
+HOST_TEST(boot_gate_take_at_or_after_window_is_false) {
+  app_core::BootSoundGate at;
+  at.defer(1'000);
+  EXPECT_TRUE(!at.take(1'000 + app_core::kBootSoundWindowMs));
+  app_core::BootSoundGate after;
+  after.defer(0);
+  EXPECT_TRUE(!after.take(app_core::kBootSoundWindowMs + 1));
+  app_core::BootSoundGate just_inside;
+  just_inside.defer(0);
+  EXPECT_TRUE(just_inside.take(app_core::kBootSoundWindowMs - 1));
+}
+
+HOST_TEST(boot_gate_take_without_defer_is_false) {
+  app_core::BootSoundGate gate;
+  EXPECT_TRUE(!gate.take(0));
+  EXPECT_TRUE(!gate.take(5'000));
+}
+
+HOST_TEST(boot_gate_expired_take_clears_pending) {
+  app_core::BootSoundGate gate;
+  gate.defer(0);
+  EXPECT_TRUE(!gate.take(app_core::kBootSoundWindowMs));
+  EXPECT_TRUE(!gate.pending());
+  EXPECT_TRUE(!gate.take(1));
+}
