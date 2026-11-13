@@ -40,6 +40,11 @@ void on_battery(const app_core::BatteryData& battery);
 // LVGL thread, so it only ever starts a sound, never waits for one.
 void on_button();
 
+// Called by net_time_monitor_task once a synced clock is first published. Plays
+// the boot melody that init() deferred (power-on: the RTC was empty), if it is
+// still within its window and the policy now allows it. Idempotent.
+void on_clock_trusted();
+
 // The policy verdict for an event right now, logged when it says no. For
 // callers that play their own sound - apply_volume_preset_change() and its
 // confirmation tone.

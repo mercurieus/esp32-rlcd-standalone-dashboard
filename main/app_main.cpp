@@ -1509,6 +1509,8 @@ void format_clock(const app_core::RtcDateTime& clock, app_core::ClockData& out) 
       format_clock(clock, data);
       data.last_sync_epoch = net_time::last_sync_epoch();
       wifi_provision::set_clock(data);
+      // Idempotent: plays the boot melody init() deferred, once, if due.
+      sound_events::on_clock_trusted();
 
       // Real elapsed time, not a tick count: the wait below is no longer a
       // fixed period, and a sync wake-up can cut it short.

@@ -119,6 +119,10 @@ app_core::ResetKind reset_kind(int reset_reason) {
   }
 }
 
+// Boot-melody deferral (see init()). esp_timer, so it counts from boot.
+app_core::BootSoundGate g_boot_gate;
+uint64_t now_ms() { return static_cast<uint64_t>(esp_timer_get_time() / 1000); }
+
 // The same three-way source string the panel's clock carries (see
 // ui_app.cpp's update_visible_clock and net_time_monitor_task), so "trusted"
 // here means exactly what the clock warning on screen means.
@@ -200,7 +204,37 @@ void init(int reset_reason) {
              reset_reason);
     return;
   }
+  // A power-on finds the RTC empty on this unit, so the clock is untrusted
+  // here and the policy would drop the melody for good (seen on the board:
+  // "boot sound silenced ... clock RTC fallback", SNTP landing ~2 s later).
+  // When the clock is the ONLY thing refusing, wait for it instead. Volume
+  // Off, or a trusted clock inside quiet hours, stay silenced as before.
+  if (ui::volume_preset() != ui::VolumePreset::Off &&
+      !ui::clock_is_set(clock_source())) {
+    g_boot_gate.defer(now_ms());
+    ESP_LOGI(kTag,
+             "boot sound deferred: clock not trusted yet, waiting up to %u s "
+             "for it",
+             static_cast<unsigned>(app_core::kBootSoundWindowMs / 1000));
+    return;
+  }
   if (!allowed(SoundEvent::Boot)) return;
+  play_async(SoundEvent::Boot, kBootMelody, std::size(kBootMelody));
+}
+
+void on_clock_trusted() {
+  if (!g_boot_gate.pending()) return;
+  if (!g_boot_gate.take(now_ms())) {
+    ESP_LOGI(kTag, "deferred boot sound dropped: clock trusted too late");
+    return;
+  }
+  // allowed() logs the reason itself when it says no (quiet hours now, or
+  // Volume turned off while waiting).
+  if (!allowed(SoundEvent::Boot)) {
+    ESP_LOGI(kTag, "deferred boot sound dropped: policy says no");
+    return;
+  }
+  ESP_LOGI(kTag, "clock trusted: playing the deferred boot sound");
   play_async(SoundEvent::Boot, kBootMelody, std::size(kBootMelody));
 }
 
