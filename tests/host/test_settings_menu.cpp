@@ -44,6 +44,7 @@ HOST_TEST(settings_items_are_ordered_by_how_often_they_are_actually_used) {
       ui::SettingsItem::QuietHours,   ui::SettingsItem::WifiSetup,
       ui::SettingsItem::CheckUpdates, ui::SettingsItem::Runtime,
       ui::SettingsItem::Battery,      ui::SettingsItem::Firmware,
+      ui::SettingsItem::Ip,
   };
   static_assert(sizeof(expected_order) / sizeof(expected_order[0]) ==
                     ui::SettingsMenu::count(),
@@ -55,7 +56,7 @@ HOST_TEST(settings_items_are_ordered_by_how_often_they_are_actually_used) {
 
 // The actual defect being fixed: a display-only row used to still be able to
 // take focus, so a press on it was a press that did nothing. Asserted by
-// walking every focus_next() step and checking these three by name, not by
+// walking every focus_next() step and checking these four by name, not by
 // checking that they merely end up last - a future reorder that moves one of
 // them earlier in the enum must not silently make it focusable again.
 HOST_TEST(settings_display_only_rows_cannot_be_focused) {
@@ -65,6 +66,7 @@ HOST_TEST(settings_display_only_rows_cannot_be_focused) {
     EXPECT_TRUE(menu.focused() != ui::SettingsItem::Runtime);
     EXPECT_TRUE(menu.focused() != ui::SettingsItem::Battery);
     EXPECT_TRUE(menu.focused() != ui::SettingsItem::Firmware);
+    EXPECT_TRUE(menu.focused() != ui::SettingsItem::Ip);
     menu.focus_next();
     if (menu.focused() == first) break;
   }

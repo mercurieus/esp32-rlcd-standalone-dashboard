@@ -48,6 +48,7 @@ constexpr Row kRows[] = {
     {"Wi-Fi setup", "Wi-Fi 設定"},
     {"Battery", "電池"},
     {"Runtime", "預估續航"},
+    {"IP", "IP"},
     {"Checking...", "檢查中..."},
     {"Off", "關閉"},
     {"Low", "低"},

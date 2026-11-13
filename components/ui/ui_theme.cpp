@@ -781,10 +781,14 @@ void button_hints(lv_obj_t* parent, Rect bounds, InputHints hints) {
   const int half = bounds.width / 2;
   const std::string key = std::string("KEY ") + text(hints.key);
   const std::string boot = std::string(text(hints.boot)) + " BOOT";
-  label(parent, key.c_str(), {bounds.x, bounds.y - 6, half, bounds.height + 6},
+  // Exactly the band, no offset: it is button_hints_band(), already tall
+  // enough for this font. The labels used to start 6px above a 5px band to
+  // make room, which label() then grew to 18px, leaving the box 7px past the
+  // safe canvas and the text cut by the panel edge.
+  label(parent, key.c_str(), {bounds.x, bounds.y, half, bounds.height},
         &lv_font_montserrat_14, LV_TEXT_ALIGN_LEFT);
   label(parent, boot.c_str(),
-        {bounds.x + half, bounds.y - 6, bounds.width - half, bounds.height + 6},
+        {bounds.x + half, bounds.y, bounds.width - half, bounds.height},
         &lv_font_montserrat_14, LV_TEXT_ALIGN_RIGHT);
 }
 

@@ -90,4 +90,13 @@ class StateMachine {
   int retries_ = 0;
 };
 
+// The station address to publish for a given state: the address itself only
+// while Connected, empty in every other state. The address arrives with
+// IP_EVENT_STA_GOT_IP and a lease does not announce its own loss, so the
+// publisher decides by state rather than trusting a remembered string - a
+// board that dropped to Connecting or fell back to setup must not keep showing
+// the address it used to have.
+std::string published_station_ip(StateMachine::State state,
+                                 std::string_view ip);
+
 }  // namespace wifi_config

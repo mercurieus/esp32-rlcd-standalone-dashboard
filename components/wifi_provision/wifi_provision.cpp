@@ -35,6 +35,11 @@ bool g_debug_force_charging = false;
 // Regenerated fresh on every entry into SetupAp; never written to NVS or
 // logged. Gates the setup HTTP portal - the AP itself is open.
 std::string portal_password_;
+// The address from the last IP_EVENT_STA_GOT_IP. Never published directly:
+// wifi_config::published_station_ip() gates it on the state, so it can stay
+// stale here (a lease is not announced when it goes) without ever reaching the
+// screen.
+std::string sta_ip_;
 // Set only when retries are exhausted and SetupAp is (re-)entered because of
 // a real failure; cleared on every other transition. Drives both the status
 // text and SetupData::error.
@@ -178,6 +183,7 @@ void apply_state_and_publish() {
       ap_ssid_.empty()
           ? std::string{}
           : wifi_config::portal_qr_payload(kPortalUrl, portal_password_);
+  snapshot_.setup.ip = wifi_config::published_station_ip(state, sta_ip_);
   snapshot_.setup.status = status_for_state();
   snapshot_.setup.error = error_for_state();
   ui::publish_snapshot(snapshot_);
@@ -230,8 +236,9 @@ void toggle_setup() {
   unlock();
 }
 
-void handle_wifi_connected() {
+void handle_wifi_connected(const std::string& ip) {
   lock();
+  sta_ip_ = ip;
   const auto old_state = state_machine_->state();
   last_disconnect_reason_ = DisconnectReason::None;
   state_machine_->on_connected();

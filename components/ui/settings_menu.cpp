@@ -8,11 +8,11 @@ void (*g_volume_preset_store)(VolumePreset) = nullptr;
 QuietHoursPreset g_quiet_hours_preset = QuietHoursPreset::From23To07;
 void (*g_quiet_hours_store)(QuietHoursPreset) = nullptr;
 
-// Runtime, Battery, and Firmware are display-only: activate() returns None
-// for all three (see below), so pressing select on one does nothing. That
+// Runtime, Battery, Firmware and Ip are display-only: activate() returns None
+// for all four (see below), so pressing select on one does nothing. That
 // used to mean the row still ate a press for nothing; skipping them here
 // means the cursor can never land on one in the first place. Keyed off
-// activate()'s own behaviour by listing the same three rows, not off
+// activate()'s own behaviour by listing the same four rows, not off
 // position in the enum, so a future reorder cannot silently make one
 // focusable again without also making it do something when selected.
 constexpr bool is_focusable(SettingsItem item) {
@@ -20,6 +20,7 @@ constexpr bool is_focusable(SettingsItem item) {
     case SettingsItem::Runtime:
     case SettingsItem::Battery:
     case SettingsItem::Firmware:
+    case SettingsItem::Ip:
       return false;
     default:
       return true;
@@ -147,6 +148,7 @@ SettingsAction SettingsMenu::activate() {
     case SettingsItem::Runtime:
     case SettingsItem::Battery:
     case SettingsItem::Firmware:
+    case SettingsItem::Ip:
       // Display only, and unreachable via focus_next() (see is_focusable()
       // above) - this branch is defensive/exhaustiveness only, not a path
       // the UI can actually take. Kept returning None rather than removed:
@@ -176,6 +178,8 @@ Text settings_item_label(SettingsItem item) {
       return Text::SettingsBattery;
     case SettingsItem::Firmware:
       return Text::SettingsFirmware;
+    case SettingsItem::Ip:
+      return Text::SettingsIp;
     case SettingsItem::Count:
       break;
   }

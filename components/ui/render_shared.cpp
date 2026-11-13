@@ -694,7 +694,8 @@ lv_obj_t* render_page(UiContext& context,
   } else if (page.id == app_core::PageId::Settings) {
     // The hint band is not decoration here. It is the only thing telling
     // anyone that KEY has stopped turning pages and started moving a cursor.
-    button_hints(replacement, page_dots_band(local_bounds),
+    // Its own band, not the dot band: the legend is 16px text, the dots 5px.
+    button_hints(replacement, button_hints_band(local_bounds),
                  input_hints(InputContext::Menu));
   }
 #ifndef NDEBUG

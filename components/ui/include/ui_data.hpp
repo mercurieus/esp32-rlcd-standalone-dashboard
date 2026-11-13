@@ -317,8 +317,19 @@ struct SettingsLayout {
 // SSID and portal URL lines, read carefully on this same panel) - so this
 // reuses a value already proven legible here rather than inventing one.
 inline constexpr int kSettingsRowHeight = kSetupLineHeight;
-inline constexpr int kSettingsRowGap = 4;
-inline constexpr int kSettingsTitleGap = 8;
+// Nine rows, a title and a status line must end above the button legend with
+// the same 7px (kSystemTrayContentGap) under them that the tray leaves above
+// the title. Measured budget on the 288px safe canvas, below the 36px tray:
+//   252 content - 18 legend band - 7 gap = 227 for the page
+//   26 title + 9*18 rows + 18 status = 206, leaving 21 for gaps
+//   = 3 (title) + 9*2 (eight between rows plus the one before the status).
+// The gaps were 8 and 4 (and the status line paid a second row gap on top):
+// 8 + 9*4 + 4 = 48px against the 21 available. Row height
+// stays at the font_small() minimum, 18 (16 line + 2*kTextInset); the gaps are
+// what gave. The inverted cursor bar is 18px with 2px of paper either side of
+// it, which keeps adjacent rows distinct.
+inline constexpr int kSettingsRowGap = 2;
+inline constexpr int kSettingsTitleGap = 3;
 // The right-hand column carries each row's current value - the version string,
 // the language name. Wide enough for "Traditional Chinese" at font 14 and for
 // a semantic version, whichever is longer.
@@ -340,8 +351,10 @@ constexpr SettingsLayout settings_layout(const Rect bounds) {
   layout.value_column =
       Rect{bounds.right() - kSettingsValueWidth, 0, kSettingsValueWidth,
            kSettingsRowHeight};
-  layout.status = Rect{bounds.x, y + kSettingsRowGap, bounds.width,
-                       kSettingsRowHeight};
+  // y already includes the gap after the last row, which is the gap the
+  // status line wants. It used to add a second one on top, spending 4px for
+  // nothing but a bigger hole above the status line.
+  layout.status = Rect{bounds.x, y, bounds.width, kSettingsRowHeight};
   return layout;
 }
 
@@ -688,6 +701,18 @@ constexpr Rect page_dots_band(const Rect bounds) {
           kPageDotSize};
 }
 
+// The strip the Settings button legend occupies, flush to the bottom of
+// bounds. Not page_dots_band: that is kPageDotSize (5px) tall because a dot is
+// 5px, and the legend was drawn into it. The legend is font_small() text,
+// whose label box label() grows to safe_text_box_height(.., 16) = 18px, so the
+// box hung 13px below its 5px band - from y=283 to y=301 on a 300px panel,
+// with the baseline row of the glyphs cut off at the edge. A band of
+// kSetupLineHeight (18) holds the box exactly and ends on the safe canvas.
+constexpr Rect button_hints_band(const Rect bounds) {
+  return {bounds.x, bounds.bottom() - kSetupLineHeight, bounds.width,
+          kSetupLineHeight};
+}
+
 // Builds a TrayIndicators with exactly one active entry (slot 0, the given
 // width) - a stand-in for "one module's icon is showing" that the
 // static_asserts below and tests/host/test_tray_layout.cpp both use, since
@@ -846,6 +871,31 @@ static_assert(
         content_bounds(safe_canvas(), app_core::PageId::Setup)),
     "setup QR keeps its quiet-zone margin from the content edges and the "
     "text column");
+
+// What settings_layout_fits could not say: it checks against the content
+// bounds, and Settings carries no dots, so those run to the very bottom of the
+// safe canvas - underneath the legend. A list that fit the content bounds
+// could still be drawn over the legend, which is how the ninth row was going
+// to. The page must end above the legend band with the gap the tray leaves
+// above the title, and the band must hold its font.
+static_assert(
+    settings_layout(content_bounds(safe_canvas(), app_core::PageId::Settings))
+                .status.bottom() +
+            kSystemTrayContentGap ==
+        button_hints_band(safe_canvas()).y,
+    "the settings status line ends one tray gap above the button legend");
+static_assert(
+    settings_layout(content_bounds(safe_canvas(), app_core::PageId::Settings))
+            .title.y -
+            (safe_canvas().y + kSystemTrayHeight + kSeparatorWidth) ==
+        kSystemTrayContentGap,
+    "the gap above the settings title is the same gap kept below its list");
+static_assert(
+    button_hints_band(safe_canvas()).height >=
+            safe_text_box_height(0, kSetupSmallFontLineHeight) &&
+        within_safe_canvas(button_hints_band(safe_canvas())),
+    "the legend band holds a font_small() line plus its insets and stays on "
+    "the safe canvas, so nothing clips at the panel edge");
 
 // settings_layout_fits existed for a while covering every rect this layout
 // produces, title through the status line - but nothing ever asserted it,

@@ -46,6 +46,7 @@ enum class Text : uint16_t {
   SettingsWifiSetup,
   SettingsBattery,
   SettingsRuntime,
+  SettingsIp,
   SettingsChecking,
   VolumeOff,
   VolumeLow,

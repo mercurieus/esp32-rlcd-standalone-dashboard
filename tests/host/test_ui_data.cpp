@@ -455,6 +455,40 @@ HOST_TEST(settings_layout_fits_and_rows_do_not_overlap) {
   EXPECT_TRUE(layout.status.bottom() <= content.bottom());
 }
 
+// Task 14: the nine-row Settings page and its button legend. settings_layout_fits
+// only checked against the content bounds, which run to the bottom of the safe
+// canvas on this page (it carries no dots), so a list that ran into the legend
+// band - or a band too short for its font - passed. This checks the real thing:
+// everything the page draws stays clear of the legend, and the legend fits.
+HOST_TEST(settings_list_and_status_end_above_the_button_legend) {
+  const ui::Rect canvas = ui::safe_canvas();
+  const ui::Rect content =
+      ui::content_bounds(canvas, app_core::PageId::Settings);
+  const ui::SettingsLayout layout = ui::settings_layout(content);
+  const ui::Rect band = ui::button_hints_band(canvas);
+
+  EXPECT_EQ(ui::kSettingsRowCount, 9);
+  // The status line is the lowest thing the page draws.
+  EXPECT_TRUE(layout.status.bottom() <= band.y);
+  EXPECT_TRUE(layout.rows[ui::kSettingsRowCount - 1].bottom() <= band.y);
+  // Even gap: what is left under the status line equals what the tray leaves
+  // above the title.
+  EXPECT_EQ(band.y - layout.status.bottom(), ui::kSystemTrayContentGap);
+  EXPECT_EQ(layout.title.y - (canvas.y + ui::kSystemTrayHeight +
+                              ui::kSeparatorWidth),
+            ui::kSystemTrayContentGap);
+
+  // The legend is drawn at font_small() (line height 16): its band must hold
+  // that line plus the label inset on both sides, or the glyphs clip. Label
+  // boxes are grown to that height by label() regardless, so a shorter band
+  // means a box that hangs below it.
+  EXPECT_TRUE(band.height >= ui::safe_text_box_height(
+                                 0, ui::kSetupSmallFontLineHeight));
+  EXPECT_TRUE(ui::within_safe_canvas(band));
+  EXPECT_EQ(band.bottom(), canvas.bottom());
+  EXPECT_TRUE(ui::rect_within(content, layout.status));
+}
+
 // battery_percent_trustworthy() used to live here, gating whether any of
 // the three battery displays printed a number at all. It is gone - the
 // charger's contribution is measured and subtracted upstream now, so there
