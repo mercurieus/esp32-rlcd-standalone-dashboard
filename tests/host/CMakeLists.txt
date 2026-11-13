@@ -166,6 +166,9 @@ if(UI_THEME_LVGL_TESTS)
         ../../components/ui/fonts/rlcd_cjk_20.c
         ../../components/ui/fonts/rlcd_cjk_28.c
         ../../components/ui/fonts/rlcd_digits_128.c
+        ../../components/ui/fonts/rlcd_weather_19.c
+        ../../components/ui/fonts/rlcd_weather_30.c
+        ../../components/ui/fonts/rlcd_weather_39.c
     )
     target_include_directories(ui_theme_lvgl_tests PRIVATE
         ../../components/app_core/include

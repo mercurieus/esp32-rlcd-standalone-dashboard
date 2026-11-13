@@ -279,10 +279,12 @@ void weather_icon(lv_obj_t* parent, Rect bounds, WeatherIconKind kind,
   // panel. A missing glyph still draws - as a placeholder rectangle - so it
   // is invisible to every other diagnostic this project has: it is not an
   // overflow, not a clip, and not an out-of-bounds object.
+#ifndef NDEBUG
   if (!measured || glyph.is_placeholder) {
     ESP_LOGW("ui_theme", "weather icon U+%04X missing from its font",
              static_cast<unsigned>(codepoint));
   }
+#endif
 
   lv_obj_t* object = lv_label_create(parent);
   if (object == nullptr) return;
