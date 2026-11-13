@@ -110,7 +110,8 @@ def _texts_after_options(argv: list) -> list:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--font", required=True,
-                    choices=["montserrat_14", "montserrat_20"])
+                    choices=["montserrat_14", "montserrat_16", "montserrat_18",
+                             "montserrat_20"])
     ap.add_argument("--cjk", choices=["14", "20"],
                     help="fall back to rlcd_cjk_<N>.c for codepoints Montserrat lacks")
     ap.add_argument("text", nargs="+")

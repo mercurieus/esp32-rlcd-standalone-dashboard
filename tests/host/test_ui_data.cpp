@@ -840,58 +840,33 @@ HOST_TEST(other_tile_details_split_reading_from_words) {
   EXPECT_TRUE(battery.value.empty());
 }
 
-// --- Weather page qualifier row: captions 14 px, readings 20 px -----------
+// --- Weather page qualifier row: one line, values at Montserrat 16 --------
 //
-// Slot widths as in the tile tests above: measured text width rounded up,
-// plus the 2 px of label()'s two insets. Text widths from
-// `python scripts/measure-text.py` (both languages for the stale marker).
-//   "FEELS"            44.6 @14 -> 47
-//   "RAIN"             36.1 @14 -> 39
-//   "-40.0°C"          75.1 @20 -> 78  widest of every -40.0..50.0 reading
-//                                      ("-24.1°C" is 67.3, "-24.4°C" 73.3)
-//   "100%"             50.9 @20 -> 53
-//   " OLD"             35.4 @14 -> 38  (" 過期" is 31.8 -> 34)
-//   "Chernivtsi 02:02" 113.6 @14 -> 116
-HOST_TEST(weather_qualifier_row_fits_its_widest_reading) {
+// Slot widths: measured text width rounded up plus the 2 px of label()'s
+// insets (scripts/measure-text.py).
+//   "~-40°C" 55.1 @16 -> 58 (widest of ~-40..~50)   "RAIN" 36.1 @14 -> 39
+//   "100%"   40.8 @16 -> 43   " OLD" 35.4 @14 -> 38 (" 過期" 31.8 -> 34)
+//   gaps 2 + 2: 182 px worst, in a 186 px box
+HOST_TEST(weather_qualifier_row_fits_one_line_and_geometry_is_restored) {
   const ui::Rect content =
       ui::content_bounds(ui::safe_canvas(), app_core::PageId::Weather);
   const ui::WeatherHeaderLayout header = ui::weather_header_layout(content);
   const ui::Rect forecast = ui::weather_forecast_rect(content);
-  const int pad = 2 * ui::kTextInset;
 
-  EXPECT_TRUE(header.location.width >= 114 + pad);
-  EXPECT_TRUE(header.feels_caption.width >= 45 + pad);
-  EXPECT_TRUE(header.rain_caption.width >= 37 + pad);
-  EXPECT_TRUE(header.feels_value.width >= 76 + pad);
-  // The reading and the stale marker after it, on the reading's baseline.
-  EXPECT_TRUE(header.rain_value.width >= (51 + pad) + (36 + pad));
+  EXPECT_EQ(header.qualifiers.width, 186);
+  EXPECT_EQ(ui::kWeatherQualifierWorstPx, 182);
+  EXPECT_TRUE(ui::kWeatherQualifierWorstPx <= header.qualifiers.width);
+  EXPECT_TRUE(header.location.width >= 114 + 2 * ui::kTextInset);
+  EXPECT_TRUE(!ui::rects_intersect(header.location, header.qualifiers));
+  EXPECT_TRUE(ui::rect_within(content, header.qualifiers));
+  EXPECT_TRUE(ui::kWeatherQualifierBoxHeight >= 18 + 2 * ui::kTextInset);
 
-  // Tall enough that label() does not grow them into their neighbours.
-  EXPECT_TRUE(header.feels_caption.height >=
-              ui::safe_text_box_height(0, ui::kSetupSmallFontLineHeight));
-  EXPECT_TRUE(header.rain_caption.height >=
-              ui::safe_text_box_height(0, ui::kSetupSmallFontLineHeight));
-  EXPECT_TRUE(header.feels_value.height >=
-              ui::safe_text_box_height(0, ui::kSetupMediumFontLineHeight));
-  EXPECT_TRUE(header.rain_value.height >=
-              ui::safe_text_box_height(0, ui::kSetupMediumFontLineHeight));
-
-  // Under the headline (condition and temperature, y + 4 .. y + 39), above
-  // the divider, and clear of the city, of each other and of the forecast.
-  const std::array<ui::Rect, 5> boxes{header.location, header.feels_caption,
-                                      header.feels_value, header.rain_caption,
-                                      header.rain_value};
-  for (std::size_t i = 0; i < boxes.size(); ++i) {
-    EXPECT_TRUE(ui::rect_within(content, boxes[i]));
-    EXPECT_TRUE(boxes[i].y >= content.y + 39);
-    EXPECT_TRUE(boxes[i].bottom() <= header.divider.y);
-    EXPECT_TRUE(!ui::rects_intersect(boxes[i], forecast));
-    for (std::size_t j = i + 1; j < boxes.size(); ++j) {
-      EXPECT_TRUE(!ui::rects_intersect(boxes[i], boxes[j]));
-    }
-  }
+  // Back where it was before the stack: divider at y + 70, forecast at 82.
+  EXPECT_EQ(header.divider.y, content.y + 70);
+  EXPECT_EQ(ui::kForecastTopOffset, 82);
+  EXPECT_EQ(forecast.y, content.y + 82);
+  EXPECT_TRUE(header.qualifiers.bottom() <= header.divider.y);
   EXPECT_TRUE(header.divider.bottom() <= forecast.y);
-  // The seven forecast rows still fit below it.
   EXPECT_TRUE(ui::forecast_columns_layout_all_fit(forecast));
   EXPECT_TRUE(ui::forecast_columns_layout_all_disjoint(forecast));
 }

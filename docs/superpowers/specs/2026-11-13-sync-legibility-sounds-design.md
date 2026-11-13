@@ -189,6 +189,14 @@ hard to read from a distance. The operator asked for **at least the values
 - Placeholder/mock text for these rows should be the worst case, so the next
   reader sees the constraint.
 
+- **2026-11-13 amendment (Task 13):** the operator saw the stacked FEELS/RAIN
+  layout on the panel and rejected it ("messed up the page"). The qualifiers
+  are one line again: `~-24°C RAIN 100% OLD`, values at **Montserrat 16**
+  (a new font size, accepted for values only; digits, `°`, `%`, `~`, no CJK
+  fallback), captions and `OLD` at 14, `~` replacing `FEELS` as on the Home
+  tile, feels-like in whole degrees. Worst case 182 px in a 186 px box. The
+  divider is back at `y + 70` and the forecast at `y + 82`.
+
 ---
 
 ## 5. The indoor chart uses the blank space beside its scales
