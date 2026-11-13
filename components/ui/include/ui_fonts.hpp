@@ -24,6 +24,11 @@ void fonts_init();
 const lv_font_t* font_small();   // Montserrat 14 + CJK 14
 const lv_font_t* font_medium();  // Montserrat 20 + CJK 20
 const lv_font_t* font_large();   // Montserrat 28 + CJK 28
+// Montserrat 16, for weather qualifier VALUES only: digits, minus, degree sign,
+// percent and "~". No CJK fallback because values are never translated; any
+// word belongs in font_small(). Added in Task 13 as the one size between 14
+// and 20 (the operator rejected stacked 20 px readings on the panel).
+const lv_font_t* font_reading();
 // Clock hero: a 128px Montserrat subset of the ten digits and a colon, and
 // NOTHING else - no letters, no percent sign, no space, no decimal point.
 //

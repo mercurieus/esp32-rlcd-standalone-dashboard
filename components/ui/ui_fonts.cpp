@@ -44,6 +44,11 @@ const lv_font_t* font_large() {
 }
 const lv_font_t* font_hero() { return &rlcd_digits_128; }
 
+// Plain Montserrat 16: no fallback, no fonts_init() dependency. Values are
+// never translated, so nothing but digits, signs, degree, percent and "~"
+// ever reaches it.
+const lv_font_t* font_reading() { return &lv_font_montserrat_16; }
+
 // No fallback on any of these and no fonts_init() dependency: each holds
 // exactly seven glyphs in a private-use range nothing else draws from, so
 // there is no script to fall back to and nothing to build at runtime.
