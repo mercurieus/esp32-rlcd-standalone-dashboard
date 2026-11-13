@@ -73,10 +73,12 @@ static_assert(audio::notes_duration_ms(kBatteryLow, std::size(kBatteryLow)) <
                   400,
               "battery-low tone must stay under 400 ms");
 
-// Button: the shortest note the audio module plays (50 ms - its kMinDurationMs;
-// with the fades the audible part is shorter still), at E6. A tick, not a beep:
-// it confirms the press and is over before the panel has finished repainting.
-constexpr audio::Note kButtonTick[] = {{1319, 50}};
+// Button: a tick at E6 (1319 Hz), not a beep. It was 50 ms, the module's
+// kMinDurationMs, and the operator could not hear it on the panel: a /beep
+// listening test at 1319 Hz found 50 ms inaudible (the fades eat most of it)
+// and 80 ms the shortest that is clearly audible. 80 ms is still well under
+// the 400 ms event-tone ceiling and over before the panel has repainted.
+constexpr audio::Note kButtonTick[] = {{1319, 80}};
 static_assert(audio::notes_duration_ms(kButtonTick, std::size(kButtonTick)) <
                   400,
               "button tick must stay under 400 ms");
