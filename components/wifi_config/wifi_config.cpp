@@ -190,6 +190,39 @@ void StateMachine::on_credentials_saved() {
   retries_ = 0;
 }
 
+RadioPlan plan_radio(StateMachine::State state, bool entered, bool ap_active,
+                     bool http_active) {
+  using State = StateMachine::State;
+  RadioPlan plan;
+  plan.connect_timeout =
+      state == State::Connecting ? TimerAction::Arm : TimerAction::Stop;
+  switch (state) {
+    case State::SetupAp:
+      // Decided by the hotspot's own flag, never by the HTTP server's: the
+      // server also runs while Connected (firmware uploads), and reading it
+      // as "setup is up" is exactly what stranded a board that lost its
+      // network with no hotspot to join.
+      plan.start_ap = !ap_active;
+      plan.new_portal_password = entered || !ap_active;
+      plan.start_http = !http_active;
+      break;
+    case State::Connected:
+      // The hotspot goes; the HTTP server stays - it is what a firmware push
+      // from a machine on the same network arrives at.
+      plan.stop_ap = ap_active;
+      plan.clear_portal_password = true;
+      plan.start_http = !http_active;
+      break;
+    case State::Connecting:
+      // A Connecting that came out of setup (credentials just saved, or the
+      // gesture back) leaves the hotspot up, as it always has: the phone that
+      // submitted the form is still on it, and if the attempt fails with a
+      // wrong password the board is back in setup with nothing to rejoin.
+      break;
+  }
+  return plan;
+}
+
 std::string published_station_ip(StateMachine::State state,
                                  std::string_view ip) {
   return state == StateMachine::State::Connected ? std::string(ip)

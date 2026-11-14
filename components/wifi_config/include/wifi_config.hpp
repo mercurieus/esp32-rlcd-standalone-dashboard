@@ -90,6 +90,34 @@ class StateMachine {
   int retries_ = 0;
 };
 
+// What the driver (wifi_provision.cpp) must do to the radio, the HTTP server
+// and its one-shot timers after the state machine settles in `state`. Pure so
+// the rules can be host-tested; the driver only executes the plan.
+//
+// The setup hotspot and the HTTP server are tracked separately on purpose.
+// They used to share one "portal active" flag: Connected starts the HTTP
+// server for firmware uploads and set that flag, so a board that later lost
+// its network and fell back to SetupAp saw "already active" and never started
+// the hotspot - no SSID, no page password, no QR, nothing to join. Entering
+// SetupAp now always brings the hotspot up whatever ran before.
+enum class TimerAction { Keep, Arm, Stop };
+
+struct RadioPlan {
+  bool start_ap = false;
+  bool stop_ap = false;
+  // A fresh page password on every entry into SetupAp (and whenever the
+  // hotspot itself has to be started); cleared once setup is left for good.
+  bool new_portal_password = false;
+  bool clear_portal_password = false;
+  bool start_http = false;
+  TimerAction connect_timeout = TimerAction::Keep;
+};
+
+// entered: this is the first plan since the state changed (or the first one
+// ever). ap_active / http_active: what is running right now.
+RadioPlan plan_radio(StateMachine::State state, bool entered, bool ap_active,
+                     bool http_active);
+
 // The station address to publish for a given state: the address itself only
 // while Connected, empty in every other state. The address arrives with
 // IP_EVENT_STA_GOT_IP and a lease does not announce its own loss, so the

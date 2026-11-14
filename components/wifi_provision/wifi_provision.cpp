@@ -44,7 +44,15 @@ std::string sta_ip_;
 // a real failure; cleared on every other transition. Drives both the status
 // text and SetupData::error.
 DisconnectReason last_disconnect_reason_ = DisconnectReason::None;
-bool portal_active_ = false;
+// Two flags, not one: the setup hotspot and the HTTP server have different
+// lifetimes (the server also runs while Connected, for firmware uploads), and
+// sharing a single "portal active" flag is what once skipped starting the
+// hotspot on a fallback to setup after a lost network. See plan_radio().
+bool ap_active_ = false;
+bool http_active_ = false;
+// The state the last apply_state_and_publish() acted on, so the plan knows a
+// state was just entered (fresh page password, retry timer armed once).
+std::optional<wifi_config::StateMachine::State> applied_state_;
 SemaphoreHandle_t mutex_ = nullptr;
 esp_timer_handle_t connect_timeout_timer_ = nullptr;
 
@@ -123,47 +131,49 @@ void apply_state_and_publish() {
   using State = wifi_config::StateMachine::State;
   const State state = state_machine_->state();
 
-  if (state == State::Connecting) {
+  const bool entered = !applied_state_.has_value() || *applied_state_ != state;
+  applied_state_ = state;
+  const wifi_config::RadioPlan plan =
+      wifi_config::plan_radio(state, entered, ap_active_, http_active_);
+
+  if (plan.connect_timeout == wifi_config::TimerAction::Arm) {
     // (Re-)arm the bound on this attempt; stop first since starting an
-    // already-running one-shot timer is an error. Any transition out of
-    // Connecting (below) stops it instead.
+    // already-running one-shot timer is an error.
     esp_timer_stop(connect_timeout_timer_);
     const esp_err_t err =
         esp_timer_start_once(connect_timeout_timer_, kConnectTimeoutUs);
     if (err != ESP_OK) {
       ESP_LOGW(kTag, "esp_timer_start_once failed: %s", esp_err_to_name(err));
     }
-  } else {
+  } else if (plan.connect_timeout == wifi_config::TimerAction::Stop) {
     esp_timer_stop(connect_timeout_timer_);
   }
 
-  if (state == State::SetupAp) {
-    if (!portal_active_) {
-      if (ap_ssid_.empty()) {
-        ap_ssid_ = wifi_config::setup_ap_ssid(wifi_manager_ap_mac());
-      }
-      uint8_t random_bytes[wifi_config::kPassphraseLength];
-      esp_fill_random(random_bytes, sizeof(random_bytes));
-      portal_password_ =
-          wifi_config::format_passphrase(random_bytes, sizeof(random_bytes));
-      wifi_manager_start_ap(ap_ssid_);
-      portal_start();
-      portal_active_ = true;
+  if (plan.new_portal_password) {
+    if (ap_ssid_.empty()) {
+      ap_ssid_ = wifi_config::setup_ap_ssid(wifi_manager_ap_mac());
     }
-  } else if (state == State::Connected) {
-    if (portal_active_) {
-      // The AP goes away; the HTTP server stays. It is what a firmware push
-      // from a machine on the same network arrives at, and leaving it up is
-      // what makes that need no button to enable.
-      //
-      // Clearing the password is what keeps the setup form shut: with none
-      // set, portal_password_ok() refuses everything, so the only route that
-      // still answers is the upload - and that one asks the board.
-      wifi_manager_stop_ap();
-    } else {
-      portal_start();
-      portal_active_ = true;
-    }
+    uint8_t random_bytes[wifi_config::kPassphraseLength];
+    esp_fill_random(random_bytes, sizeof(random_bytes));
+    portal_password_ =
+        wifi_config::format_passphrase(random_bytes, sizeof(random_bytes));
+  }
+  if (plan.start_ap) {
+    wifi_manager_start_ap(ap_ssid_);
+    ap_active_ = true;
+  }
+  if (plan.stop_ap) {
+    wifi_manager_stop_ap();
+    ap_active_ = false;
+  }
+  if (plan.start_http) {
+    portal_start();
+    http_active_ = true;
+  }
+  if (plan.clear_portal_password) {
+    // Clearing the password is what keeps the setup form shut: with none
+    // set, portal_password_ok() refuses everything, so the only route that
+    // still answers is the upload - and that one asks the board.
     portal_password_.clear();
   }
 
