@@ -148,31 +148,57 @@ StateMachine::StateMachine(bool has_saved_credentials)
     : state_(has_saved_credentials ? State::Connecting : State::SetupAp),
       has_credentials_(has_saved_credentials) {}
 
+uint32_t StateMachine::retry_delay_ms() const {
+  // Indexed by consecutive failures; the last entry repeats forever.
+  static constexpr uint32_t kDelaysMs[] = {5000, 10000, 30000, 60000, 300000};
+  constexpr int kCount = static_cast<int>(sizeof(kDelaysMs) / sizeof(kDelaysMs[0]));
+  if (retries_ <= 1) return kDelaysMs[0];
+  return retries_ >= kCount ? kDelaysMs[kCount - 1] : kDelaysMs[retries_ - 1];
+}
+
 void StateMachine::on_connected() {
   state_ = State::Connected;
   retries_ = 0;
+  connected_once_ = true;
 }
 
-void StateMachine::on_disconnected() {
+void StateMachine::on_disconnected(bool auth_failure) {
   switch (state_) {
     case State::Connecting:
-      if (++retries_ >= kMaxRetries) {
-        state_ = State::SetupAp;
-      }
+      ++retries_;
+      // Only a rejection of credentials that have never worked is worth
+      // asking a person about; everything else is the network's problem and
+      // goes away on its own, so wait and try again.
+      state_ = (auth_failure && !connected_once_) ? State::SetupAp
+                                                  : State::Waiting;
       break;
     case State::Connected:
+      // Try again at once: most drops are momentary. The backoff starts
+      // fresh from the first delay if that attempt fails.
       state_ = State::Connecting;
       retries_ = 0;
       break;
+    case State::Waiting:
     case State::SetupAp:
+      // No attempt is in flight: a late event from one that already ended
+      // (or was aborted) must neither count nor restart anything.
       break;
   }
+}
+
+void StateMachine::on_lost_ip() {
+  if (state_ == State::Connected) on_disconnected(false);
+}
+
+void StateMachine::on_retry_timer() {
+  if (state_ == State::Waiting) state_ = State::Connecting;
 }
 
 void StateMachine::on_setup_gesture() {
   switch (state_) {
     case State::Connecting:
     case State::Connected:
+    case State::Waiting:
       state_ = State::SetupAp;
       break;
     case State::SetupAp:
@@ -186,8 +212,18 @@ void StateMachine::on_setup_gesture() {
 
 void StateMachine::on_credentials_saved() {
   has_credentials_ = true;
+  connected_once_ = false;
   state_ = State::Connecting;
   retries_ = 0;
+}
+
+SetupFlags setup_flags(StateMachine::State state) {
+  using State = StateMachine::State;
+  SetupFlags flags;
+  flags.active = state == State::SetupAp;
+  flags.connected = state == State::Connected;
+  flags.connecting = state == State::Connecting;
+  return flags;
 }
 
 RadioPlan plan_radio(StateMachine::State state, bool entered, bool ap_active,
@@ -196,6 +232,9 @@ RadioPlan plan_radio(StateMachine::State state, bool entered, bool ap_active,
   RadioPlan plan;
   plan.connect_timeout =
       state == State::Connecting ? TimerAction::Arm : TimerAction::Stop;
+  plan.retry_timer = state != State::Waiting ? TimerAction::Stop
+                     : entered               ? TimerAction::Arm
+                                             : TimerAction::Keep;
   switch (state) {
     case State::SetupAp:
       // Decided by the hotspot's own flag, never by the HTTP server's: the
@@ -212,6 +251,12 @@ RadioPlan plan_radio(StateMachine::State state, bool entered, bool ap_active,
       plan.stop_ap = ap_active;
       plan.clear_portal_password = true;
       plan.start_http = !http_active;
+      break;
+    case State::Waiting:
+      // Setup was not asked for: no hotspot while the board just waits to
+      // retry its own network. The HTTP server is left as it is.
+      plan.stop_ap = ap_active;
+      plan.clear_portal_password = true;
       break;
     case State::Connecting:
       // A Connecting that came out of setup (credentials just saved, or the

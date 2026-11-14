@@ -68,27 +68,76 @@ std::string format_passphrase(const uint8_t* bytes, std::size_t length);
 bool constant_time_equal(std::string_view a, std::string_view b);
 
 // Provisioning lifecycle. Owns no timers or threads; callers drive it with
-// events observed elsewhere.
+// events observed elsewhere (wifi_provision.cpp arms the one-shot timers the
+// plan below asks for and feeds their expiry back in).
+//
+//   (no saved credentials) --------------------------> SetupAp
+//   (saved credentials) ---> Connecting
+//   Connecting --connected--> Connected
+//   Connecting --failed, auth failure, set never connected this boot--> SetupAp
+//   Connecting --failed, anything else--> Waiting   (retries + 1)
+//   Waiting --retry timer (retry_delay_ms())--> Connecting
+//   Connected --disconnected / lost IP--> Connecting (immediate, retries = 0)
+//   Connecting / Connected / Waiting --setup gesture--> SetupAp
+//   SetupAp --setup gesture, has credentials--> Connecting (retries = 0)
+//   any --credentials saved--> Connecting (new set: retries = 0, never connected)
+//
+// There is no retry budget. A fixed budget of five spent itself in well under
+// a minute on an ordinary router reboot (immediate reconnects plus the 15 s
+// connect timeout) and then sat in SetupAp, which retried nothing, until
+// someone pressed KEY. Setup now opens on its own only when it is actually
+// needed: no credentials, or a password the network rejected before it ever
+// worked. Everything else waits and retries, backing off, forever.
 class StateMachine {
  public:
-  enum class State { Connecting, Connected, SetupAp };
-  static constexpr int kMaxRetries = 5;
+  enum class State { Connecting, Connected, SetupAp, Waiting };
 
   explicit StateMachine(bool has_saved_credentials);
 
   State state() const { return state_; }
+  // Consecutive failed attempts since the last connect, gesture back from
+  // setup, or credentials save.
   int retries() const { return retries_; }
+  // How long Waiting waits before the next attempt, from retries(): 5 s,
+  // 10 s, 30 s, 60 s, then 300 s for every later failure. Short at first so
+  // a router reboot or a blip costs seconds; capped at 5 min so an outage
+  // costs one scan every 5 min of radio time, not a scan every few seconds.
+  uint32_t retry_delay_ms() const;
 
   void on_connected();
-  void on_disconnected();
+  // auth_failure: the network rejected the credentials (wrong password).
+  // Only consulted in Connecting; ignored (stale) in Waiting and SetupAp.
+  void on_disconnected(bool auth_failure);
+  // IP_EVENT_STA_LOST_IP. A disconnect only while Connected; esp_netif also
+  // raises it after an ordinary disconnect, which is already being handled.
+  void on_lost_ip();
+  // The Waiting timer expired: Waiting -> Connecting. No-op elsewhere, so a
+  // timer callback that raced a transition changes nothing.
+  void on_retry_timer();
   void on_setup_gesture();
   void on_credentials_saved();
 
  private:
   State state_;
   bool has_credentials_;
+  // The current credential set has reached Connected at least once since
+  // boot (or since it was saved). After that an auth failure is a flaky
+  // router, not a wrong password, and must not strand the board in setup.
+  bool connected_once_ = false;
   int retries_ = 0;
 };
+
+// The three SetupData flags a state publishes. Only SetupAp sets active,
+// which is the one thing ui_app.cpp uses to put the Setup page on screen -
+// Waiting and Connecting leave the carousel up. Only Connecting sets
+// connecting, the flag that blinks the tray icon, so the icon blinks during
+// an actual attempt and sits crossed out (Off) while Waiting.
+struct SetupFlags {
+  bool active = false;
+  bool connected = false;
+  bool connecting = false;
+};
+SetupFlags setup_flags(StateMachine::State state);
 
 // What the driver (wifi_provision.cpp) must do to the radio, the HTTP server
 // and its one-shot timers after the state machine settles in `state`. Pure so
@@ -111,6 +160,9 @@ struct RadioPlan {
   bool clear_portal_password = false;
   bool start_http = false;
   TimerAction connect_timeout = TimerAction::Keep;
+  // Armed once on entry into Waiting with retry_delay_ms(); Keep while
+  // Waiting so a republish never restarts the wait; Stop elsewhere.
+  TimerAction retry_timer = TimerAction::Keep;
 };
 
 // entered: this is the first plan since the state changed (or the first one

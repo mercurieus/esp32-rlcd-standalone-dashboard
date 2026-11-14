@@ -1,6 +1,7 @@
 #define UI_THEME_GEOMETRY_ONLY
 #include "app_snapshot.hpp"
 #include "ui_data.hpp"
+#include "wifi_config.hpp"
 
 #include "test_support.hpp"
 
@@ -139,6 +140,33 @@ HOST_TEST(wifi_icon_is_slashed_in_setup_or_unconfigured) {
   EXPECT_TRUE(ui::wifi_icon_visible(ui::WifiIconState::Off, 500));
   EXPECT_TRUE(ui::wifi_icon_state(app_core::SetupData{}) ==
               ui::WifiIconState::Off);
+}
+
+// What wifi_provision publishes for each provisioning state, run through the
+// UI's own mapping. Waiting (between retries after a lost network) must keep
+// the carousel on screen (active false - ui_app.cpp shows Setup only while
+// active) and show the crossed-out icon without blinking; only an actual
+// attempt blinks.
+HOST_TEST(wifi_icon_and_setup_page_follow_the_published_state_flags) {
+  using State = wifi_config::StateMachine::State;
+  const auto published = [](State state) {
+    const wifi_config::SetupFlags flags = wifi_config::setup_flags(state);
+    app_core::SetupData setup;
+    setup.active = flags.active;
+    setup.connected = flags.connected;
+    setup.connecting = flags.connecting;
+    return setup;
+  };
+  const app_core::SetupData waiting = published(State::Waiting);
+  EXPECT_TRUE(!waiting.active);
+  EXPECT_TRUE(ui::wifi_icon_state(waiting) == ui::WifiIconState::Off);
+  EXPECT_TRUE(ui::wifi_icon_visible(ui::wifi_icon_state(waiting), 500));
+  const app_core::SetupData connecting = published(State::Connecting);
+  EXPECT_TRUE(!connecting.active);
+  EXPECT_TRUE(ui::wifi_icon_state(connecting) == ui::WifiIconState::Connecting);
+  EXPECT_TRUE(ui::wifi_icon_state(published(State::Connected)) ==
+              ui::WifiIconState::Connected);
+  EXPECT_TRUE(published(State::SetupAp).active);
 }
 
 HOST_TEST(connected_wins_over_a_stale_connecting_flag) {

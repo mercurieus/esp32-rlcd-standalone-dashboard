@@ -56,12 +56,17 @@ void wifi_manager_stop_ap();
 void wifi_manager_connect_sta(const wifi_config::Credentials& creds);
 // Retries the STA connection with the already-configured credentials.
 void wifi_manager_reconnect_sta();
+// Abandons whatever STA attempt is in flight (esp_wifi_disconnect()) without
+// reconnecting afterwards - the retry timer decides when to try again.
+void wifi_manager_abort_sta();
 std::array<uint8_t, 6> wifi_manager_ap_mac();
 
 // --- wifi_provision.cpp, called from wifi_manager.cpp's event handlers ---
 // ip is the dotted-quad station address from IP_EVENT_STA_GOT_IP.
 void handle_wifi_connected(const std::string& ip);
 void handle_wifi_disconnected(DisconnectReason reason);
+// IP_EVENT_STA_LOST_IP: acted on only while Connected.
+void handle_wifi_lost_ip();
 
 // --- wifi_provision.cpp, read/called by portal.cpp ---
 std::string current_ap_ssid();
