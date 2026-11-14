@@ -192,22 +192,28 @@ HOST_TEST(state_machine_starts_setup_ap_without_saved_credentials) {
   EXPECT_TRUE(machine.state() == StateMachine::State::SetupAp);
 }
 
-HOST_TEST(state_machine_moves_to_setup_ap_after_max_retries) {
+// Was state_machine_moves_to_setup_ap_after_max_retries. The retry budget is
+// gone (it is what stranded the operator's board); the intent - a run of
+// ordinary failures on a never-connected credential set - now pins that the
+// machine keeps retrying instead of giving up.
+HOST_TEST(state_machine_never_connected_ordinary_failures_keep_retrying) {
   StateMachine machine(true);
-  for (int i = 0; i < StateMachine::kMaxRetries - 1; ++i) {
-    machine.on_disconnected();
+  for (int i = 1; i <= 8; ++i) {
     EXPECT_TRUE(machine.state() == StateMachine::State::Connecting);
+    machine.on_disconnected(false);
+    EXPECT_TRUE(machine.state() == StateMachine::State::Waiting);
+    EXPECT_EQ(machine.retries(), i);
+    machine.on_retry_timer();
   }
-  EXPECT_EQ(machine.retries(), StateMachine::kMaxRetries - 1);
-  machine.on_disconnected();
-  EXPECT_TRUE(machine.state() == StateMachine::State::SetupAp);
-  EXPECT_EQ(machine.retries(), StateMachine::kMaxRetries);
+  EXPECT_TRUE(machine.state() == StateMachine::State::Connecting);
 }
 
 HOST_TEST(state_machine_connected_resets_retry_counter) {
   StateMachine machine(true);
-  machine.on_disconnected();
-  machine.on_disconnected();
+  machine.on_disconnected(false);
+  machine.on_retry_timer();
+  machine.on_disconnected(false);
+  machine.on_retry_timer();
   machine.on_connected();
   EXPECT_TRUE(machine.state() == StateMachine::State::Connected);
   EXPECT_EQ(machine.retries(), 0);
@@ -216,14 +222,16 @@ HOST_TEST(state_machine_connected_resets_retry_counter) {
 HOST_TEST(state_machine_disconnect_from_connected_returns_to_connecting) {
   StateMachine machine(true);
   machine.on_connected();
-  machine.on_disconnected();
+  machine.on_disconnected(false);
   EXPECT_TRUE(machine.state() == StateMachine::State::Connecting);
   EXPECT_EQ(machine.retries(), 0);
 }
 
 HOST_TEST(state_machine_ignores_disconnect_while_in_setup_ap) {
   StateMachine machine(false);
-  machine.on_disconnected();
+  machine.on_disconnected(false);
+  EXPECT_TRUE(machine.state() == StateMachine::State::SetupAp);
+  machine.on_disconnected(true);
   EXPECT_TRUE(machine.state() == StateMachine::State::SetupAp);
   EXPECT_EQ(machine.retries(), 0);
 }
@@ -261,38 +269,206 @@ HOST_TEST(state_machine_credentials_saved_moves_to_connecting_with_fresh_retries
   EXPECT_TRUE(machine.state() == StateMachine::State::Connecting);
   EXPECT_EQ(machine.retries(), 0);
 
-  machine.on_disconnected();
-  machine.on_disconnected();
+  machine.on_disconnected(false);
+  machine.on_retry_timer();
+  machine.on_disconnected(false);
   machine.on_credentials_saved();
   EXPECT_EQ(machine.retries(), 0);
   EXPECT_TRUE(machine.state() == StateMachine::State::Connecting);
 }
 
+// Was: five failures after saving credentials land in SetupAp. The intent -
+// what a just-saved credential set does when it fails - now splits by cause:
+// a wrong password reopens setup, anything else waits and retries.
 HOST_TEST(state_machine_reconnect_after_saving_credentials_then_disconnect) {
-  StateMachine machine(false);
-  machine.on_credentials_saved();
-  EXPECT_TRUE(machine.state() == StateMachine::State::Connecting);
-  for (int i = 0; i < StateMachine::kMaxRetries; ++i) {
-    machine.on_disconnected();
+  StateMachine wrong_password(false);
+  wrong_password.on_credentials_saved();
+  EXPECT_TRUE(wrong_password.state() == StateMachine::State::Connecting);
+  wrong_password.on_disconnected(true);
+  EXPECT_TRUE(wrong_password.state() == StateMachine::State::SetupAp);
+
+  StateMachine out_of_range(false);
+  out_of_range.on_credentials_saved();
+  for (int i = 0; i < 6; ++i) {
+    out_of_range.on_disconnected(false);
+    EXPECT_TRUE(out_of_range.state() == StateMachine::State::Waiting);
+    out_of_range.on_retry_timer();
   }
+}
+
+// Was state_machine_on_disconnected_is_reason_agnostic_five_reach_setup_ap.
+// wifi_provision.cpp's connect-timeout esp_timer fires
+// handle_wifi_disconnected(DisconnectReason::Timeout), which reaches
+// on_disconnected(false): a timed-out attempt is an ordinary failure, so it
+// waits and retries like "network not found" and never opens setup.
+HOST_TEST(state_machine_timed_out_attempts_wait_and_retry_like_any_ordinary_failure) {
+  StateMachine machine(true);
+  for (int i = 0; i < 7; ++i) {
+    EXPECT_TRUE(machine.state() == StateMachine::State::Connecting);
+    machine.on_disconnected(false);
+    EXPECT_TRUE(machine.state() == StateMachine::State::Waiting);
+    machine.on_retry_timer();
+  }
+  EXPECT_EQ(machine.retries(), 7);
+}
+
+// The operator's case: the board had a working network, then the router
+// rebooted (or the board went out of range). It must never give up into
+// setup on its own; it alternates waiting and trying, backing off.
+HOST_TEST(state_machine_router_reboot_retries_forever_with_backoff) {
+  StateMachine machine(true);
+  machine.on_connected();
+  machine.on_disconnected(false);
+  EXPECT_TRUE(machine.state() == StateMachine::State::Connecting);
+  const uint32_t expected[] = {5000, 10000, 30000, 60000, 300000, 300000,
+                               300000};
+  for (const uint32_t delay : expected) {
+    EXPECT_TRUE(machine.state() == StateMachine::State::Connecting);
+    machine.on_disconnected(false);  // "network not found"
+    EXPECT_TRUE(machine.state() == StateMachine::State::Waiting);
+    EXPECT_EQ(machine.retry_delay_ms(), delay);
+    machine.on_retry_timer();
+  }
+  EXPECT_TRUE(machine.state() == StateMachine::State::Connecting);
+}
+
+HOST_TEST(state_machine_wrong_password_never_connected_opens_setup) {
+  StateMachine machine(true);
+  machine.on_disconnected(true);
   EXPECT_TRUE(machine.state() == StateMachine::State::SetupAp);
 }
 
-// wifi_provision.cpp's connect-timeout esp_timer (armed whenever this state
-// machine is Connecting; see apply_state_and_publish()) fires
-// handle_wifi_disconnected(DisconnectReason::Timeout) on expiry, which calls
-// this exact on_disconnected() - the state machine takes no reason
-// parameter, so a timed-out attempt counts against the retry budget exactly
-// like a real WIFI_EVENT_STA_DISCONNECTED does, and five of them (real or
-// timed-out) land in SetupAp the same way.
-HOST_TEST(state_machine_on_disconnected_is_reason_agnostic_five_reach_setup_ap) {
+// A rejected handshake after the network has worked this boot is far more
+// likely a flaky router than a password that changed under us; retry.
+HOST_TEST(state_machine_auth_failure_after_a_connect_waits_instead_of_setup) {
   StateMachine machine(true);
-  for (int i = 0; i < StateMachine::kMaxRetries; ++i) {
-    EXPECT_TRUE(machine.state() == StateMachine::State::Connecting);
-    machine.on_disconnected();
-  }
+  machine.on_connected();
+  machine.on_disconnected(false);
+  machine.on_disconnected(true);
+  EXPECT_TRUE(machine.state() == StateMachine::State::Waiting);
+  machine.on_retry_timer();
+  machine.on_disconnected(true);
+  EXPECT_TRUE(machine.state() == StateMachine::State::Waiting);
+}
+
+// New credentials are a new set: "has connected" does not carry over.
+HOST_TEST(state_machine_new_credentials_forget_the_earlier_connect) {
+  StateMachine machine(true);
+  machine.on_connected();
+  machine.on_setup_gesture();
+  machine.on_credentials_saved();
+  machine.on_disconnected(true);
   EXPECT_TRUE(machine.state() == StateMachine::State::SetupAp);
-  EXPECT_EQ(machine.retries(), StateMachine::kMaxRetries);
+}
+
+HOST_TEST(state_machine_successful_connect_resets_backoff) {
+  StateMachine machine(true);
+  for (int i = 0; i < 4; ++i) {
+    machine.on_disconnected(false);
+    machine.on_retry_timer();
+  }
+  machine.on_disconnected(false);
+  EXPECT_EQ(machine.retry_delay_ms(), static_cast<uint32_t>(300000));
+  machine.on_retry_timer();
+  machine.on_connected();
+  machine.on_disconnected(false);  // Connected -> immediate attempt
+  machine.on_disconnected(false);  // that attempt fails
+  EXPECT_TRUE(machine.state() == StateMachine::State::Waiting);
+  EXPECT_EQ(machine.retry_delay_ms(), static_cast<uint32_t>(5000));
+}
+
+HOST_TEST(state_machine_gesture_from_waiting_opens_setup_and_back) {
+  StateMachine machine(true);
+  machine.on_disconnected(false);
+  EXPECT_TRUE(machine.state() == StateMachine::State::Waiting);
+  machine.on_setup_gesture();
+  EXPECT_TRUE(machine.state() == StateMachine::State::SetupAp);
+  machine.on_setup_gesture();
+  EXPECT_TRUE(machine.state() == StateMachine::State::Connecting);
+}
+
+// Stale events must not move a waiting machine: a late disconnect (e.g. from
+// aborting a timed-out attempt) neither counts nor restarts anything.
+HOST_TEST(state_machine_waiting_ignores_disconnects_and_retry_timer_only_acts_there) {
+  StateMachine machine(true);
+  machine.on_disconnected(false);
+  machine.on_disconnected(false);
+  machine.on_disconnected(true);
+  EXPECT_TRUE(machine.state() == StateMachine::State::Waiting);
+  EXPECT_EQ(machine.retries(), 1);
+
+  StateMachine connected(true);
+  connected.on_connected();
+  connected.on_retry_timer();
+  EXPECT_TRUE(connected.state() == StateMachine::State::Connected);
+  StateMachine setup(false);
+  setup.on_retry_timer();
+  EXPECT_TRUE(setup.state() == StateMachine::State::SetupAp);
+}
+
+// IP_EVENT_STA_LOST_IP is a disconnect only while Connected. esp_netif also
+// raises it ~120 s after an ordinary disconnect, by which time the machine
+// is already Waiting or Connecting; that one must change nothing.
+HOST_TEST(state_machine_lost_ip_acts_only_while_connected) {
+  StateMachine machine(true);
+  machine.on_connected();
+  machine.on_lost_ip();
+  EXPECT_TRUE(machine.state() == StateMachine::State::Connecting);
+  EXPECT_EQ(machine.retries(), 0);
+  machine.on_lost_ip();
+  EXPECT_TRUE(machine.state() == StateMachine::State::Connecting);
+  machine.on_disconnected(false);
+  machine.on_lost_ip();
+  EXPECT_TRUE(machine.state() == StateMachine::State::Waiting);
+  EXPECT_EQ(machine.retries(), 1);
+}
+
+HOST_TEST(state_machine_no_credentials_starts_in_setup_unchanged) {
+  StateMachine machine(false);
+  EXPECT_TRUE(machine.state() == StateMachine::State::SetupAp);
+  EXPECT_EQ(machine.retries(), 0);
+}
+
+// Operator requirement: only SetupAp takes the screen. ui_app.cpp shows the
+// Setup page exactly while SetupData::active is true, so Waiting and
+// Connecting must publish active == false (the carousel stays up), and only
+// Connecting may set the flag that blinks the tray icon.
+HOST_TEST(setup_flags_only_setup_ap_takes_the_screen) {
+  using State = StateMachine::State;
+  const wifi_config::SetupFlags waiting = wifi_config::setup_flags(State::Waiting);
+  EXPECT_TRUE(!waiting.active);
+  EXPECT_TRUE(!waiting.connected);
+  EXPECT_TRUE(!waiting.connecting);
+  const wifi_config::SetupFlags connecting =
+      wifi_config::setup_flags(State::Connecting);
+  EXPECT_TRUE(!connecting.active);
+  EXPECT_TRUE(connecting.connecting);
+  const wifi_config::SetupFlags connected =
+      wifi_config::setup_flags(State::Connected);
+  EXPECT_TRUE(!connected.active);
+  EXPECT_TRUE(connected.connected);
+  const wifi_config::SetupFlags setup = wifi_config::setup_flags(State::SetupAp);
+  EXPECT_TRUE(setup.active);
+  EXPECT_TRUE(!setup.connecting);
+}
+
+HOST_TEST(plan_radio_waiting_stops_hotspot_and_arms_retry_once) {
+  using State = StateMachine::State;
+  const wifi_config::RadioPlan entered =
+      wifi_config::plan_radio(State::Waiting, true, true, true);
+  EXPECT_TRUE(entered.stop_ap);
+  EXPECT_TRUE(entered.clear_portal_password);
+  EXPECT_TRUE(entered.retry_timer == wifi_config::TimerAction::Arm);
+  EXPECT_TRUE(entered.connect_timeout == wifi_config::TimerAction::Stop);
+  // A later publish while still Waiting must not restart the wait.
+  const wifi_config::RadioPlan again =
+      wifi_config::plan_radio(State::Waiting, false, false, true);
+  EXPECT_TRUE(again.retry_timer == wifi_config::TimerAction::Keep);
+  for (const State other :
+       {State::Connecting, State::Connected, State::SetupAp}) {
+    EXPECT_TRUE(wifi_config::plan_radio(other, true, false, false).retry_timer ==
+                wifi_config::TimerAction::Stop);
+  }
 }
 
 // SetupData::ip feeds the Settings IP row. A lease is not announced when it is
@@ -309,6 +485,9 @@ HOST_TEST(published_station_ip_is_empty_unless_connected) {
   EXPECT_TRUE(wifi_config::published_station_ip(State::SetupAp,
                                                 "192.168.1.210")
                   .empty());
+  EXPECT_TRUE(wifi_config::published_station_ip(State::Waiting,
+                                                "192.168.1.210")
+                  .empty());
   // Connected with no address yet (the state flips before the string is
   // stored in no ordering we rely on) stays empty rather than inventing one.
   EXPECT_TRUE(wifi_config::published_station_ip(State::Connected, "").empty());
@@ -320,9 +499,12 @@ HOST_TEST(published_station_ip_is_empty_unless_connected) {
   machine.on_connected();
   EXPECT_TRUE(wifi_config::published_station_ip(machine.state(), "10.0.0.5") ==
               "10.0.0.5");
-  machine.on_disconnected();
+  machine.on_disconnected(false);
   EXPECT_TRUE(wifi_config::published_station_ip(machine.state(), "10.0.0.5")
                   .empty());  // back to Connecting
+  machine.on_disconnected(false);
+  EXPECT_TRUE(wifi_config::published_station_ip(machine.state(), "10.0.0.5")
+                  .empty());  // Waiting
   machine.on_setup_gesture();
   EXPECT_TRUE(wifi_config::published_station_ip(machine.state(), "10.0.0.5")
                   .empty());  // SetupAp

@@ -131,6 +131,13 @@ void ip_event_handler(void*, esp_event_base_t, int32_t event_id,
     char ip[16];  // "255.255.255.255" + NUL
     std::snprintf(ip, sizeof(ip), IPSTR, IP2STR(&event->ip_info.ip));
     handle_wifi_connected(ip);
+  } else if (event_id == IP_EVENT_STA_LOST_IP) {
+    // A lease that expired without renewal while the association stayed up
+    // used to leave "connected" (and the old address) on screen with no
+    // route. esp_netif also posts this ~120 s after a plain disconnect; the
+    // provisioning side ignores it unless it is still Connected.
+    ESP_LOGW(kTag, "sta lost ip");
+    handle_wifi_lost_ip();
   }
 }
 
@@ -151,7 +158,10 @@ esp_err_t wifi_manager_init() {
   result = esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
                                       &wifi_event_handler, nullptr);
   if (result != ESP_OK) return result;
-  return esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+  result = esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+                                      &ip_event_handler, nullptr);
+  if (result != ESP_OK) return result;
+  return esp_event_handler_register(IP_EVENT, IP_EVENT_STA_LOST_IP,
                                     &ip_event_handler, nullptr);
 }
 
@@ -219,6 +229,18 @@ void wifi_manager_connect_sta(const wifi_config::Credentials& creds) {
 }
 
 void wifi_manager_reconnect_sta() { connect_or_defer_until_disconnected(); }
+
+void wifi_manager_abort_sta() {
+  // A reconfig teardown that was pending would reconnect from the event
+  // handler; the caller wants no attempt until its retry timer fires, so the
+  // resulting disconnect must reach handle_wifi_disconnected() (which ignores
+  // it while Waiting) instead.
+  pending_reconfig_disconnect_ = false;
+  const esp_err_t err = esp_wifi_disconnect();
+  if (err != ESP_OK) {
+    ESP_LOGW(kTag, "esp_wifi_disconnect (abort) failed: %s", esp_err_to_name(err));
+  }
+}
 
 std::array<uint8_t, 6> wifi_manager_ap_mac() {
   std::array<uint8_t, 6> mac{};

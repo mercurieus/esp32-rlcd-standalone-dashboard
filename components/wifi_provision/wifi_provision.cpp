@@ -22,7 +22,7 @@ constexpr char kPortalUrl[] = "http://192.168.4.1/";
 // treated as a failed attempt. Association plus a DHCP lease normally
 // finishes in a couple of seconds; 15s gives a slow/congested AP headroom
 // without letting a silent hang (no event ever arriving - the exact way this
-// bug was originally triggered) stall the 5-retry budget forever.
+// bug was originally triggered) stall the retry loop forever.
 constexpr uint64_t kConnectTimeoutUs = 15 * 1000 * 1000ULL;
 
 app_core::AppSnapshot snapshot_;
@@ -40,9 +40,10 @@ std::string portal_password_;
 // stale here (a lease is not announced when it goes) without ever reaching the
 // screen.
 std::string sta_ip_;
-// Set only when retries are exhausted and SetupAp is (re-)entered because of
-// a real failure; cleared on every other transition. Drives both the status
-// text and SetupData::error.
+// Why the last attempt failed, set when a failure moves the machine to
+// Waiting or SetupAp; cleared on connect, gesture and credentials save.
+// Drives the status text, and SetupData::error in SetupAp only - Waiting is
+// not an error box, it is a board that will try again on its own.
 DisconnectReason last_disconnect_reason_ = DisconnectReason::None;
 // Two flags, not one: the setup hotspot and the HTTP server have different
 // lifetimes (the server also runs while Connected, for firmware uploads), and
@@ -55,6 +56,9 @@ bool http_active_ = false;
 std::optional<wifi_config::StateMachine::State> applied_state_;
 SemaphoreHandle_t mutex_ = nullptr;
 esp_timer_handle_t connect_timeout_timer_ = nullptr;
+// One-shot wait between attempts while Waiting (StateMachine::retry_delay_ms).
+// The only periodic wakeup an outage adds: one per 5 s..5 min, nothing else.
+esp_timer_handle_t retry_timer_ = nullptr;
 
 void lock() { xSemaphoreTake(mutex_, portMAX_DELAY); }
 void unlock() { xSemaphoreGive(mutex_); }
@@ -65,18 +69,32 @@ const char* state_name(wifi_config::StateMachine::State state) {
     case State::Connecting: return "Connecting";
     case State::Connected: return "Connected";
     case State::SetupAp: return "SetupAp";
+    case State::Waiting: return "Waiting";
   }
   return "?";
 }
 
 // Mutex must be held by the caller. Logs every call site so a serial
-// capture shows the full state trail, including retry-count-only changes
-// that don't cross a state boundary (e.g. a mid-budget reconnect attempt).
+// capture shows the full state trail, with the failure count and the wait
+// the next retry will use.
 void log_transition(const char* trigger,
                     wifi_config::StateMachine::State old_state) {
-  ESP_LOGI(kTag, "%s: state %s -> %s (retry %d/%d)", trigger,
+  ESP_LOGI(kTag, "%s: state %s -> %s (failures %d, next wait %u ms)", trigger,
           state_name(old_state), state_name(state_machine_->state()),
-          state_machine_->retries(), wifi_config::StateMachine::kMaxRetries);
+          state_machine_->retries(),
+          static_cast<unsigned>(state_machine_->retry_delay_ms()));
+}
+
+// "Network not found" etc. for a failure the board will retry by itself.
+const char* waiting_reason_text() {
+  switch (last_disconnect_reason_) {
+    case DisconnectReason::AuthFailure: return "Password rejected";
+    case DisconnectReason::NotFound: return "Network not found";
+    case DisconnectReason::Timeout: return "Connection timed out";
+    case DisconnectReason::Other:
+    case DisconnectReason::None: return "Connection lost";
+  }
+  return "Connection lost";
 }
 
 std::string status_for_state() {
@@ -84,9 +102,23 @@ std::string status_for_state() {
   switch (state_machine_->state()) {
     case State::Connecting: {
       char buffer[40];
-      std::snprintf(buffer, sizeof(buffer), "Connecting - attempt %d of %d",
-                    state_machine_->retries() + 1,
-                    wifi_config::StateMachine::kMaxRetries);
+      std::snprintf(buffer, sizeof(buffer), "Connecting - attempt %d",
+                    state_machine_->retries() + 1);
+      return buffer;
+    }
+    case State::Waiting: {
+      // Static, not a countdown: counting down would mean a publish (and a
+      // panel repaint) every second for the whole outage.
+      const uint32_t seconds = state_machine_->retry_delay_ms() / 1000;
+      char buffer[64];
+      if (seconds >= 60) {
+        std::snprintf(buffer, sizeof(buffer), "%s - retrying in %u min",
+                      waiting_reason_text(),
+                      static_cast<unsigned>(seconds / 60));
+      } else {
+        std::snprintf(buffer, sizeof(buffer), "%s - retrying in %u s",
+                      waiting_reason_text(), static_cast<unsigned>(seconds));
+      }
       return buffer;
     }
     case State::Connected:
@@ -116,14 +148,22 @@ bool error_for_state() {
 
 // esp_timer callback (runs on the esp_timer task, not the LVGL thread) for a
 // Connecting attempt that never produced a wifi/ip event. Routes through the
-// same handle_wifi_disconnected() path as a real disconnect so the existing
-// retry bound and SetupAp fallback apply unchanged; DisconnectReason::Timeout
-// keeps it distinguishable from an actual 802.11 disconnect in the log and
-// status text.
+// same handle_wifi_disconnected() path as a real disconnect, so it waits and
+// retries like any ordinary failure; DisconnectReason::Timeout keeps it
+// distinguishable from an actual 802.11 disconnect in the log and status
+// text. handle_wifi_disconnected() drops it if the state has already left
+// Connecting (the callback can be blocked on the mutex while a connect lands).
 void connect_timeout_cb(void*) {
   ESP_LOGW(kTag, "connect attempt timed out with no wifi event");
   handle_wifi_disconnected(DisconnectReason::Timeout);
 }
+
+void handle_retry_timer();
+
+// esp_timer callback for the end of a Waiting period. Same shape as
+// connect_timeout_cb: everything, including esp_wifi_connect(), happens in a
+// handler that takes the provisioning mutex, never in the callback itself.
+void retry_timer_cb(void*) { handle_retry_timer(); }
 
 // Starts/stops the AP + portal to match the current state and republishes
 // the snapshot. Mutex must be held by the caller.
@@ -147,6 +187,19 @@ void apply_state_and_publish() {
     }
   } else if (plan.connect_timeout == wifi_config::TimerAction::Stop) {
     esp_timer_stop(connect_timeout_timer_);
+  }
+
+  if (plan.retry_timer == wifi_config::TimerAction::Arm) {
+    esp_timer_stop(retry_timer_);
+    const uint64_t wait_us =
+        static_cast<uint64_t>(state_machine_->retry_delay_ms()) * 1000ULL;
+    const esp_err_t err = esp_timer_start_once(retry_timer_, wait_us);
+    if (err != ESP_OK) {
+      ESP_LOGW(kTag, "retry esp_timer_start_once failed: %s",
+               esp_err_to_name(err));
+    }
+  } else if (plan.retry_timer == wifi_config::TimerAction::Stop) {
+    esp_timer_stop(retry_timer_);
   }
 
   if (plan.new_portal_password) {
@@ -177,9 +230,12 @@ void apply_state_and_publish() {
     portal_password_.clear();
   }
 
-  snapshot_.setup.active = (state == State::SetupAp);
-  snapshot_.setup.connected = (state == State::Connected);
-  snapshot_.setup.connecting = (state == State::Connecting);
+  // setup_flags() is host-tested: only SetupAp sets active (the one thing
+  // that puts the Setup page on screen), only Connecting blinks the icon.
+  const wifi_config::SetupFlags flags = wifi_config::setup_flags(state);
+  snapshot_.setup.active = flags.active;
+  snapshot_.setup.connected = flags.connected;
+  snapshot_.setup.connecting = flags.connecting;
   snapshot_.setup.ap_ssid = ap_ssid_;
   snapshot_.setup.portal_password = portal_password_;
   snapshot_.setup.portal_url = ap_ssid_.empty() ? std::string{} : kPortalUrl;
@@ -211,6 +267,13 @@ esp_err_t start(const app_core::AppSnapshot& snapshot) {
   timer_args.dispatch_method = ESP_TIMER_TASK;
   timer_args.name = "wifi_connect_timeout";
   esp_err_t result = esp_timer_create(&timer_args, &connect_timeout_timer_);
+  if (result != ESP_OK) return result;
+
+  esp_timer_create_args_t retry_args{};
+  retry_args.callback = &retry_timer_cb;
+  retry_args.dispatch_method = ESP_TIMER_TASK;
+  retry_args.name = "wifi_retry_wait";
+  result = esp_timer_create(&retry_args, &retry_timer_);
   if (result != ESP_OK) return result;
 
   result = nvs_store_init();
@@ -258,22 +321,93 @@ void handle_wifi_connected(const std::string& ip) {
 }
 
 void handle_wifi_disconnected(DisconnectReason reason) {
+  using State = wifi_config::StateMachine::State;
   lock();
   const auto old_state = state_machine_->state();
-  state_machine_->on_disconnected();
+  if (reason == DisconnectReason::Timeout && old_state != State::Connecting) {
+    // The timeout callback lost a race with a transition (it was blocked on
+    // the mutex while a connect or gesture landed). Not a failure.
+    ESP_LOGI(kTag, "stale connect timeout ignored in %s", state_name(old_state));
+    unlock();
+    return;
+  }
+  state_machine_->on_disconnected(reason == DisconnectReason::AuthFailure);
+  const State new_state = state_machine_->state();
   log_transition("disconnected", old_state);
-  if (state_machine_->state() == wifi_config::StateMachine::State::Connecting) {
+  if (new_state == old_state) {
+    // Waiting or SetupAp: no attempt in flight, so this is a late event from
+    // one that already ended or was aborted. Republishing would only restart
+    // nothing; leave the running wait alone.
+    unlock();
+    return;
+  }
+  if (reason == DisconnectReason::Timeout) {
+    // The attempt that timed out may still be in flight inside the driver.
+    // Abort it now so the next esp_wifi_connect() (from the retry timer)
+    // never lands on a connect already in progress. Its own disconnect event
+    // arrives in Waiting and is ignored above.
+    wifi_manager_abort_sta();
+  }
+  if (new_state == State::Connecting) {
     wifi_manager_reconnect_sta();
-  } else if (state_machine_->state() ==
-             wifi_config::StateMachine::State::SetupAp) {
-    // Retry budget just got exhausted; surface why.
+  } else {
+    // Waiting or SetupAp: surface why.
     last_disconnect_reason_ = reason;
-    ESP_LOGW(kTag, "retry budget exhausted, entering setup AP: %s",
-            to_string(reason));
+    if (new_state == State::SetupAp) {
+      ESP_LOGW(kTag, "credentials rejected before ever connecting, entering setup AP: %s",
+               to_string(reason));
+    } else {
+      ESP_LOGW(kTag, "attempt failed (%s), retrying in %u ms", to_string(reason),
+               static_cast<unsigned>(state_machine_->retry_delay_ms()));
+    }
   }
   apply_state_and_publish();
   unlock();
 }
+
+void handle_wifi_lost_ip() {
+  using State = wifi_config::StateMachine::State;
+  lock();
+  const auto old_state = state_machine_->state();
+  state_machine_->on_lost_ip();
+  log_transition("lost_ip", old_state);
+  if (state_machine_->state() == old_state) {
+    // esp_netif raises LOST_IP a while after an ordinary disconnect too; that
+    // one is already being handled by the retry loop.
+    unlock();
+    return;
+  }
+  if (state_machine_->state() == State::Connecting) {
+    // Still associated but without a lease: wifi_manager_reconnect_sta()
+    // tears the association down first and reconnects from the disconnect
+    // event, which runs DHCP again.
+    wifi_manager_reconnect_sta();
+  }
+  apply_state_and_publish();
+  unlock();
+}
+
+namespace {
+
+void handle_retry_timer() {
+  lock();
+  const auto old_state = state_machine_->state();
+  state_machine_->on_retry_timer();
+  log_transition("retry_timer", old_state);
+  if (state_machine_->state() == old_state) {
+    // Raced a gesture or connect that already moved the machine on.
+    unlock();
+    return;
+  }
+  // Waiting -> Connecting. The previous attempt has ended (its disconnect
+  // event is what moved us to Waiting) or was aborted on timeout, so this
+  // esp_wifi_connect() never lands on one in flight.
+  wifi_manager_reconnect_sta();
+  apply_state_and_publish();
+  unlock();
+}
+
+}  // namespace
 
 // Provider tasks start about 1.7 s before DHCP completes, so a fetch issued at
 // task start hits a stack with no route and fails with ESP_ERR_HTTP_CONNECT.
