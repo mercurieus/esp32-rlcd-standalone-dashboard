@@ -74,20 +74,22 @@ bool constant_time_equal(std::string_view a, std::string_view b);
 //   (no saved credentials) --------------------------> SetupAp
 //   (saved credentials) ---> Connecting
 //   Connecting --connected--> Connected
-//   Connecting --failed, auth failure, set never connected this boot--> SetupAp
+//   Connecting --failed, auth failure, set not proven--> SetupAp
 //   Connecting --failed, anything else--> Waiting   (retries + 1)
 //   Waiting --retry timer (retry_delay_ms())--> Connecting
 //   Connected --disconnected / lost IP--> Connecting (immediate, retries = 0)
 //   Connecting / Connected / Waiting --setup gesture--> SetupAp
 //   SetupAp --setup gesture, has credentials--> Connecting (retries = 0)
-//   any --credentials saved--> Connecting (new set: retries = 0, never connected)
+//   any --credentials saved--> Connecting (new set: retries = 0, not proven)
 //
 // There is no retry budget. A fixed budget of five spent itself in well under
 // a minute on an ordinary router reboot (immediate reconnects plus the 15 s
 // connect timeout) and then sat in SetupAp, which retried nothing, until
 // someone pressed KEY. Setup now opens on its own only when it is actually
-// needed: no credentials, or a password the network rejected before it ever
-// worked. Everything else waits and retries, backing off, forever.
+// needed: no credentials, or credentials typed into the portal this boot that
+// the network rejected before they ever worked (a typo). Everything else -
+// including any failure, auth-class or not, of credentials loaded from NVS -
+// waits and retries, backing off, forever.
 class StateMachine {
  public:
   enum class State { Connecting, Connected, SetupAp, Waiting };
@@ -106,7 +108,8 @@ class StateMachine {
 
   void on_connected();
   // auth_failure: the network rejected the credentials (wrong password).
-  // Only consulted in Connecting; ignored (stale) in Waiting and SetupAp.
+  // Only consulted in Connecting, and only for credentials that are not yet
+  // proven (see proven_); ignored (stale) in Waiting and SetupAp.
   void on_disconnected(bool auth_failure);
   // IP_EVENT_STA_LOST_IP. A disconnect only while Connected; esp_netif also
   // raises it after an ordinary disconnect, which is already being handled.
@@ -120,10 +123,13 @@ class StateMachine {
  private:
   State state_;
   bool has_credentials_;
-  // The current credential set has reached Connected at least once since
-  // boot (or since it was saved). After that an auth failure is a flaky
-  // router, not a wrong password, and must not strand the board in setup.
-  bool connected_once_ = false;
+  // The current credential set is trusted: it was loaded from NVS at boot
+  // (it was saved because it once worked), or it has reached Connected since
+  // it was saved through the portal. An auth-class failure of a proven set is
+  // a flaky or half-booted router - after a shared power cut one answers with
+  // 4WAY_HANDSHAKE_TIMEOUT / ASSOC_FAIL - not a wrong password, and must not
+  // strand the board in setup. Only a portal save this boot clears it.
+  bool proven_ = false;
   int retries_ = 0;
 };
 

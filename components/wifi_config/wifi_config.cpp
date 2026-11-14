@@ -146,7 +146,8 @@ bool constant_time_equal(std::string_view a, std::string_view b) {
 
 StateMachine::StateMachine(bool has_saved_credentials)
     : state_(has_saved_credentials ? State::Connecting : State::SetupAp),
-      has_credentials_(has_saved_credentials) {}
+      has_credentials_(has_saved_credentials),
+      proven_(has_saved_credentials) {}
 
 uint32_t StateMachine::retry_delay_ms() const {
   // Indexed by consecutive failures; the last entry repeats forever.
@@ -159,18 +160,18 @@ uint32_t StateMachine::retry_delay_ms() const {
 void StateMachine::on_connected() {
   state_ = State::Connected;
   retries_ = 0;
-  connected_once_ = true;
+  proven_ = true;
 }
 
 void StateMachine::on_disconnected(bool auth_failure) {
   switch (state_) {
     case State::Connecting:
       ++retries_;
-      // Only a rejection of credentials that have never worked is worth
-      // asking a person about; everything else is the network's problem and
-      // goes away on its own, so wait and try again.
-      state_ = (auth_failure && !connected_once_) ? State::SetupAp
-                                                  : State::Waiting;
+      // Only a rejection of credentials just typed into the portal, before
+      // they ever worked, is worth asking a person about (a typo). Everything
+      // else is the network's problem and goes away on its own, so wait and
+      // try again.
+      state_ = (auth_failure && !proven_) ? State::SetupAp : State::Waiting;
       break;
     case State::Connected:
       // Try again at once: most drops are momentary. The backoff starts
@@ -212,7 +213,7 @@ void StateMachine::on_setup_gesture() {
 
 void StateMachine::on_credentials_saved() {
   has_credentials_ = true;
-  connected_once_ = false;
+  proven_ = false;
   state_ = State::Connecting;
   retries_ = 0;
 }
