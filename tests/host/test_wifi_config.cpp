@@ -327,3 +327,67 @@ HOST_TEST(published_station_ip_is_empty_unless_connected) {
   EXPECT_TRUE(wifi_config::published_station_ip(machine.state(), "10.0.0.5")
                   .empty());  // SetupAp
 }
+
+// The operator's stranded board: Connected first (which starts the HTTP
+// server for firmware uploads), then the network goes and the machine falls
+// back to SetupAp. The hotspot must still come up, with a page password -
+// the HTTP server already running must not be mistaken for it.
+HOST_TEST(plan_radio_starts_hotspot_in_setup_even_when_http_server_already_runs) {
+  using State = StateMachine::State;
+  const wifi_config::RadioPlan plan = wifi_config::plan_radio(
+      State::SetupAp, /*entered=*/true, /*ap_active=*/false,
+      /*http_active=*/true);
+  EXPECT_TRUE(plan.start_ap);
+  EXPECT_TRUE(plan.new_portal_password);
+  EXPECT_TRUE(!plan.start_http);
+  EXPECT_TRUE(!plan.stop_ap);
+  EXPECT_TRUE(plan.connect_timeout == wifi_config::TimerAction::Stop);
+}
+
+HOST_TEST(plan_radio_first_setup_starts_hotspot_and_http_server) {
+  using State = StateMachine::State;
+  const wifi_config::RadioPlan plan =
+      wifi_config::plan_radio(State::SetupAp, true, false, false);
+  EXPECT_TRUE(plan.start_ap);
+  EXPECT_TRUE(plan.start_http);
+  EXPECT_TRUE(plan.new_portal_password);
+}
+
+// Re-entering SetupAp while the hotspot is still up (a setup attempt that
+// failed) keeps the hotspot but still issues a fresh page password.
+HOST_TEST(plan_radio_reentering_setup_with_hotspot_up_only_refreshes_password) {
+  using State = StateMachine::State;
+  const wifi_config::RadioPlan plan =
+      wifi_config::plan_radio(State::SetupAp, true, true, true);
+  EXPECT_TRUE(!plan.start_ap);
+  EXPECT_TRUE(!plan.stop_ap);
+  EXPECT_TRUE(plan.new_portal_password);
+  const wifi_config::RadioPlan again =
+      wifi_config::plan_radio(State::SetupAp, false, true, true);
+  EXPECT_TRUE(!again.new_portal_password);
+}
+
+// Leaving setup for Connected stops the hotspot and keeps the HTTP server.
+HOST_TEST(plan_radio_connected_stops_hotspot_keeps_http_server) {
+  using State = StateMachine::State;
+  const wifi_config::RadioPlan plan =
+      wifi_config::plan_radio(State::Connected, true, true, true);
+  EXPECT_TRUE(plan.stop_ap);
+  EXPECT_TRUE(!plan.start_http);
+  EXPECT_TRUE(plan.clear_portal_password);
+  const wifi_config::RadioPlan cold =
+      wifi_config::plan_radio(State::Connected, true, false, false);
+  EXPECT_TRUE(!cold.stop_ap);
+  EXPECT_TRUE(cold.start_http);
+}
+
+HOST_TEST(plan_radio_connecting_arms_the_connect_timeout_only) {
+  using State = StateMachine::State;
+  const wifi_config::RadioPlan plan =
+      wifi_config::plan_radio(State::Connecting, true, true, true);
+  EXPECT_TRUE(plan.connect_timeout == wifi_config::TimerAction::Arm);
+  EXPECT_TRUE(!plan.start_ap);
+  EXPECT_TRUE(!plan.stop_ap);
+  EXPECT_TRUE(!plan.new_portal_password);
+  EXPECT_TRUE(!plan.clear_portal_password);
+}
