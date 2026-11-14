@@ -332,10 +332,46 @@ HOST_TEST(state_machine_router_reboot_retries_forever_with_backoff) {
   EXPECT_TRUE(machine.state() == StateMachine::State::Connecting);
 }
 
-HOST_TEST(state_machine_wrong_password_never_connected_opens_setup) {
+// Was state_machine_wrong_password_never_connected_opens_setup, which booted
+// with saved credentials. Fix round 1: credentials loaded from NVS are
+// proven. After a shared power cut a half-booted router answers with
+// 4WAY_HANDSHAKE_TIMEOUT / ASSOC_FAIL (auth-class), and that must not strand
+// the board in setup - it backs off forever like any other failure.
+HOST_TEST(state_machine_boot_credentials_never_open_setup_on_auth_failures) {
   StateMachine machine(true);
+  const uint32_t expected[] = {5000, 10000, 30000, 60000, 300000, 300000,
+                               300000};
+  for (const uint32_t delay : expected) {
+    EXPECT_TRUE(machine.state() == StateMachine::State::Connecting);
+    machine.on_disconnected(true);
+    EXPECT_TRUE(machine.state() == StateMachine::State::Waiting);
+    EXPECT_EQ(machine.retry_delay_ms(), delay);
+    machine.on_retry_timer();
+  }
+  EXPECT_TRUE(machine.state() == StateMachine::State::Connecting);
+}
+
+// Credentials typed into the portal this boot and rejected before they ever
+// worked: most likely a typo, so setup reopens for the person to fix it.
+HOST_TEST(state_machine_portal_credentials_auth_failure_before_connect_opens_setup) {
+  StateMachine machine(true);
+  machine.on_setup_gesture();
+  machine.on_credentials_saved();
   machine.on_disconnected(true);
   EXPECT_TRUE(machine.state() == StateMachine::State::SetupAp);
+}
+
+// The same portal credentials, once they have connected, are proven too.
+HOST_TEST(state_machine_portal_credentials_auth_failure_after_connect_waits) {
+  StateMachine machine(false);
+  machine.on_credentials_saved();
+  machine.on_connected();
+  machine.on_disconnected(false);  // Connected -> immediate attempt
+  machine.on_disconnected(true);   // that attempt is rejected
+  EXPECT_TRUE(machine.state() == StateMachine::State::Waiting);
+  machine.on_retry_timer();
+  machine.on_disconnected(true);
+  EXPECT_TRUE(machine.state() == StateMachine::State::Waiting);
 }
 
 // A rejected handshake after the network has worked this boot is far more

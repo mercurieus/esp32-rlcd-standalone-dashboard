@@ -354,7 +354,7 @@ void handle_wifi_disconnected(DisconnectReason reason) {
     // Waiting or SetupAp: surface why.
     last_disconnect_reason_ = reason;
     if (new_state == State::SetupAp) {
-      ESP_LOGW(kTag, "credentials rejected before ever connecting, entering setup AP: %s",
+      ESP_LOGW(kTag, "new credentials rejected before ever connecting, entering setup AP: %s",
                to_string(reason));
     } else {
       ESP_LOGW(kTag, "attempt failed (%s), retrying in %u ms", to_string(reason),
